@@ -1,6 +1,6 @@
 import express from "express";
 import { timingSafeEqual } from "node:crypto";
-import { env } from "./env.js";
+import { env, describeProviders } from "./env.js";
 import { db, rpc } from "./db.js";
 import { runAgent } from "./runAgent.js";
 
@@ -110,4 +110,5 @@ setInterval(
 
 app.listen(env.port, () => {
   console.log(`agent server listening on :${env.port} (worker ${env.workerId})`);
+  console.log(describeProviders());
 });
