@@ -1,69 +1,100 @@
-import Image from "next/image";
+import Link from "next/link";
+import { redirect } from "next/navigation";
+import { serverClient, requireUser } from "@/lib/supabase-server";
+import { RUN_STATES, isRunStatus, ACTIVE_STATUSES } from "@/lib/runStates";
+import { Badge, Card, CardHeader } from "@/components/ui";
+import { IntakeForm } from "@/components/IntakeForm";
 
-export default function Home() {
+export const dynamic = "force-dynamic";
+
+export default async function HomePage() {
+  const user = await requireUser();
+  if (!user) redirect("/sign-in");
+
+  const supabase = await serverClient();
+  const { data: runs } = await supabase
+    .from("runs")
+    .select("id, status, created_at, form")
+    .order("created_at", { ascending: false })
+    .limit(8);
+
+  const all = runs ?? [];
+  const activeRun = all.find((r) => isRunStatus(r.status) && ACTIVE_STATUSES.includes(r.status));
+  // Narrowed once here, so the JSX below never has to cast.
+  const active =
+    activeRun && isRunStatus(activeRun.status)
+      ? { id: activeRun.id, status: activeRun.status, spec: RUN_STATES[activeRun.status] }
+      : null;
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+    <main className="mx-auto w-full max-w-4xl space-y-6 px-5 py-10">
+      {/* One active run per user. Rather than letting the form be filled in and
+          rejected at the end, the refusal is shown up front with the way to
+          resolve it. */}
+      {active ? (
+        <Card>
+          <CardHeader
+            title="You have a run in progress"
+            meta={<Badge tone={active.spec.tone}>{active.status.replace(/_/g, " ")}</Badge>}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+            <p className="text-sm text-[var(--text-muted)]">
+              {active.spec.headline}. Only one run can be active at a time —
+              the Apify budget is shared, so two at once is how one person's share becomes two.
+            </p>
+            <Link
+              href={`/runs/${active.id}`}
+              className="rounded-[8px] bg-[var(--accent)] px-3.5 py-2 text-sm font-medium text-[var(--accent-text)]"
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+              Go to it
+            </Link>
+          </div>
+        </Card>
+      ) : (
+        <>
+          <header>
+            <h1 className="text-xl font-semibold tracking-tight">New research run</h1>
+            <p className="mt-1 max-w-2xl text-sm text-[var(--text-muted)]">
+              Describe the companies you want. You'll confirm the criteria before anything is
+              searched, and every draft it writes is for you to review — nothing is ever sent.
+            </p>
+          </header>
+          <IntakeForm />
+        </>
+      )}
+
+      {all.length > 0 ? (
+        <Card>
+          <CardHeader title="Earlier runs" />
+          <ul className="divide-y divide-[var(--border)]">
+            {all.map((r) => {
+              const status = isRunStatus(r.status) ? r.status : null;
+              const form = r.form as { industry?: string; geography?: string } | null;
+              return (
+                <li key={r.id}>
+                  <Link
+                    href={`/runs/${r.id}`}
+                    className="flex items-center justify-between gap-4 px-5 py-3 hover:bg-[var(--surface-2)]"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">
+                        {[form?.industry, form?.geography].filter(Boolean).join(" · ") ||
+                          "Untitled run"}
+                      </p>
+                      <p className="text-xs text-[var(--text-muted)]">
+                        {new Date(r.created_at).toLocaleString()}
+                      </p>
+                    </div>
+                    <Badge tone={status ? RUN_STATES[status].tone : "neutral"}>
+                      {String(r.status).replace(/_/g, " ")}
+                    </Badge>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
+      ) : null}
+    </main>
   );
 }
