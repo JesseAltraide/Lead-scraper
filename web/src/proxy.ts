@@ -5,8 +5,11 @@ import { createServerClient } from "@supabase/ssr";
  * Refreshes the Supabase session cookie on every request. Without this, a
  * server component can read a stale session and redirect a signed-in user to
  * the sign-in page.
+ *
+ * Next 16 renamed the `middleware` convention to `proxy`; the behaviour is
+ * unchanged. Named `proxy` export in `src/proxy.ts`.
  */
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const response = NextResponse.next({ request });
 
   const supabase = createServerClient(

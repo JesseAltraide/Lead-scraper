@@ -91,8 +91,9 @@ export function Field({
 }
 
 export const inputClass =
-  "w-full rounded-[8px] border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm " +
-  "placeholder:text-[var(--text-faint)] focus:border-[var(--accent)] focus:outline-none";
+  "w-full rounded-[8px] border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2 text-sm " +
+  "text-[var(--text)] placeholder:text-[var(--text-faint)] " +
+  "focus:border-[var(--accent)] focus:outline-none";
 
 export function EmptyState({ title, detail }: { title: string; detail: string }) {
   return (

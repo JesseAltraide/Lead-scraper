@@ -18,6 +18,12 @@
   --accent: #1c1917;
   --accent-text: #ffffff;
 
+  /* Form fields get their own background so a field is distinguishable from
+     the card behind it by more than a hairline border. In dark mode the field
+     sits BELOW the card (page background), which reads as an inset well. */
+  --input-bg: #ffffff;
+  --input-border: #d6d3d1;
+
   /* State colours. Each maps to a run tone in runStates.ts. */
   --working: #0369a1;
   --working-bg: #f0f9ff;
@@ -46,6 +52,9 @@
 
     --accent: #fafaf9;
     --accent-text: #1c1917;
+
+    --input-bg: #0c0a09;
+    --input-border: #57534e;
 
     --working: #7dd3fc;
     --working-bg: #0c2c3f;
