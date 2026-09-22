@@ -6,6 +6,7 @@ import { RunActions } from "@/components/RunActions";
 import { IcpEditor } from "@/components/IcpEditor";
 import { ClarifyForm } from "@/components/ClarifyForm";
 import type { Icp } from "@/lib/icp";
+import type { ClarificationItem } from "@/lib/clarityCheck";
 
 export const dynamic = "force-dynamic";
 
@@ -158,7 +159,8 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
             <ClarifyForm
               runId={id}
               status={status}
-              questions={(run.pending_questions ?? []) as never}
+              findings={(run.pending_questions ?? []) as ClarificationItem[]}
+              form={(run.form ?? {}) as Record<string, unknown>}
               round={run.clarification_rounds + 1}
               changeKey={changeKey}
             />

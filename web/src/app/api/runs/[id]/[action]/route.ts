@@ -7,7 +7,12 @@ import {
   type RunActionId,
   type RunStatus,
 } from "@/lib/runStates";
-import { icpSchema } from "@/lib/icp";
+import { icpSchema, intakeFormSchema } from "@/lib/icp";
+import {
+  runClarityCheck,
+  blockerResolved,
+  type ClarificationItem,
+} from "@/lib/clarityCheck";
 
 /**
  * Every run action goes through here.
@@ -33,6 +38,8 @@ const ENDPOINT_TO_ACTION: Record<string, RunActionId> = {
   continue: "continue_higher_limit",
 };
 
+const BREAK = String.fromCharCode(10);
+
 /** Raised limits for "continue with higher limits" on a partial run. */
 const RAISED_LIMITS = { max_candidates: 30, max_scrapes: 20, max_tool_calls: 80, max_agent_turns: 60 };
 
@@ -54,7 +61,7 @@ export async function POST(
   // database rather than by a check we could forget to write.
   const { data: run } = await supabase
     .from("runs")
-    .select("id, status, icp, form, clarification_rounds, target_leads")
+    .select("id, status, icp, form, clarification_rounds, target_leads, pending_questions")
     .eq("id", id)
     .maybeSingle();
 
@@ -218,13 +225,63 @@ export async function POST(
 
     // -----------------------------------------------------------------------
     case "answer_clarification": {
-      const answers = (body as { answers?: Record<string, string> })?.answers ?? {};
+      const payload = body as {
+        answers?: Record<string, string>;
+        formEdits?: Record<string, unknown>;
+      };
+      const answers = payload.answers ?? {};
+      const formEdits = payload.formEdits ?? {};
+
+      const storedForm = (run.form ?? {}) as Record<string, unknown>;
+      const findings = (run.pending_questions ?? []) as ClarificationItem[];
+      const blockers = findings.filter((f) => f.kind === "blocker");
+
+      const merged = { ...storedForm, ...formEdits };
+
+      // THE enforcement. A contradiction cannot be explained away — one of the
+      // conflicting fields must genuinely hold a different value now. Without
+      // this check a blocker is only a strongly-worded question, and the user
+      // can press on with a search that cannot possibly succeed.
+      const unresolved = blockers.filter((b) => !blockerResolved(b, storedForm, merged));
+      if (unresolved.length > 0) {
+        return NextResponse.json(
+          {
+            error:
+              unresolved.length === 1
+                ? `Change one of these to continue: ${unresolved[0]!.fields.join(" or ")}. These answers can't both be true, so explaining won't make the search possible.`
+                : `${unresolved.length} contradictions still need a field changed.`,
+          },
+          { status: 400 },
+        );
+      }
+
+      // Free-text answers are context, so they go into the notes the agent
+      // reads — not into a field they were never meant to overwrite.
+      const extraNotes = Object.entries(answers)
+        .map(([field, answer]) => `${field}: ${String(answer).trim()}`)
+        .filter((line) => !line.endsWith(": "))
+        .join(BREAK);
+
+      const candidate = {
+        ...merged,
+        notes: [String(merged.notes ?? ""), extraNotes].filter(Boolean).join(BREAK).trim(),
+      };
+
+      const reparsed = intakeFormSchema.safeParse(candidate);
+      if (!reparsed.success) {
+        return NextResponse.json(
+          {
+            error: `That still isn't valid: ${reparsed.error.issues[0]?.message ?? "unknown problem"}`,
+          },
+          { status: 400 },
+        );
+      }
 
       if (run.clarification_rounds >= 3) {
         return NextResponse.json(
           {
             error:
-              "That's the third round of questions. Rather than keep asking, edit the form directly and submit it again.",
+              "That's three rounds of questions. Start a new search rather than going round again — nothing here has been spent.",
           },
           { status: 409 },
         );
@@ -235,7 +292,7 @@ export async function POST(
         .update({
           status: "refining",
           clarification_rounds: run.clarification_rounds + 1,
-          form: { ...(run.form as object), clarifications: answers },
+          form: reparsed.data,
           pending_questions: null,
         })
         .eq("id", id)
@@ -244,12 +301,14 @@ export async function POST(
         .maybeSingle();
 
       if (!data) return conflict();
-      await event(db, id, "status_change", "refining", "Answers received — re-checking the form.");
+      await event(db, id, "status_change", "refining", "Answers received — re-checking.");
 
-      // Phase 1 runs again with the answers appended. Deliberately a fresh
-      // check rather than resuming a suspended session: a suspended loop dies
-      // with the process, a fresh check does not.
-      return NextResponse.json({ ok: true, recheck: true });
+      // Actually re-run it. `refining` has no user action but cancel, so
+      // leaving a run sitting there would be a dead end — which is exactly
+      // what this did before: it set the status and nothing ever ran.
+      await runClarityCheck(id, reparsed.data);
+
+      return NextResponse.json({ ok: true });
     }
 
     default:
