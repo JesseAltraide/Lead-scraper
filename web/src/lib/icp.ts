@@ -32,6 +32,53 @@ const cleanList = z
     return out;
   });
 
+/**
+ * Job titles that say nothing on their own. "Head" and "Director" are not
+ * roles — "Head of Operations" is. A persona this vague produces outreach that
+ * could be addressed to anyone, which is exactly the generic copy the
+ * copywriting guide warns against.
+ *
+ * Genuinely standalone titles (CEO, CTO, founder) are deliberately NOT here:
+ * they identify a role by themselves.
+ */
+const VAGUE_PERSONAS = new Set([
+  "head",
+  "heads",
+  "lead",
+  "leads",
+  "leader",
+  "manager",
+  "director",
+  "boss",
+  "exec",
+  "execs",
+  "executive",
+  "executives",
+  "leadership",
+  "management",
+  "decision maker",
+  "decision makers",
+  "decisionmaker",
+  "decision-maker",
+  "decision-makers",
+  "staff",
+  "employee",
+  "employees",
+  "people",
+  "team",
+  "teams",
+  "person",
+  "someone",
+  "anyone",
+  "them",
+]);
+
+/** True when the persona is too vague to write outreach for. */
+export function isVaguePersona(value: string): boolean {
+  const v = value.trim().toLowerCase().replace(/\s+/g, " ");
+  return VAGUE_PERSONAS.has(v);
+}
+
 export const intakeFormSchema = z
   .object({
     // Industry, geography and company size are AUTOMATIC hard filters — they
@@ -42,7 +89,10 @@ export const intakeFormSchema = z
     maxEmployees: z.coerce.number().int().positive("Max employees must be a positive whole number"),
 
     // Who the outreach is written FOR. The agent never searches for people.
-    buyerPersona: nonEmpty("Buyer persona"),
+    buyerPersona: nonEmpty("Buyer persona").refine((v) => !isVaguePersona(v), {
+      message:
+        "That's too vague to write to — \"Head\" of what? Try a full title, like \"Head of Operations\" or \"VP of Customer Support\".",
+    }),
     businessProblem: nonEmpty("Business problem"),
 
     mustHave: cleanList,   // extra hard filters beyond industry/geography/size

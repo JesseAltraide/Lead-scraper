@@ -20,6 +20,12 @@ const STAGE_LABEL: Record<string, { text: string; tone: string }> = {
   qualified_done: { text: "Qualified", tone: "done" },
 };
 
+const LEAD_LABEL: Record<string, string> = {
+  qualified: "Good fit",
+  needs_review: "Couldn't fully check",
+  not_qualified: "Not a fit",
+};
+
 const LEAD_TONE: Record<string, string> = {
   qualified: "done",
   needs_review: "waiting",
@@ -90,6 +96,11 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
   const qualified = allLeads.filter((l) => l.status === "qualified");
   const needsReview = allLeads.filter((l) => l.status === "needs_review");
 
+  // What this run actually CONTAINS, which decides what is possible alongside
+  // its status. A run cancelled during the clarifying questions has no ICP, so
+  // every action needing one is impossible whatever the status says.
+  const ctx = { hasIcp: Boolean(run.icp), hasLeads: allLeads.length > 0 };
+
   // Changes whenever anything the screen displays changes, so the poll can tell
   // a refresh that landed from one that silently did nothing.
   const changeKey = [run.updated_at, run.status, allCandidates.length, allLeads.length].join("|");
@@ -103,7 +114,7 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
             <p className="mt-1 max-w-2xl text-sm text-[var(--text-muted)]">{spec.detail}</p>
           </div>
           <Badge tone={spec.tone} live={spec.live}>
-            {status.replace(/_/g, " ")}
+            {spec.label}
           </Badge>
         </div>
 
@@ -133,7 +144,7 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
 
       {/* --- The per-status body ------------------------------------------- */}
 
-      {status === "icp_ready" && run.icp ? (
+      {status === "icp_ready" && ctx.hasIcp ? (
         <Card>
           <CardHeader title="What we'll search for" meta="Editable until you start" />
           <div className="px-5 py-5">
@@ -156,7 +167,13 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
       ) : (
         <Card>
           <div className="px-5 py-4">
-            <RunActions runId={id} status={status} changeKey={changeKey} live={spec.live} />
+            <RunActions
+              runId={id}
+              status={status}
+              ctx={ctx}
+              changeKey={changeKey}
+              live={spec.live}
+            />
           </div>
         </Card>
       )}
@@ -241,7 +258,7 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
                   {l.confidence}
                 </span>
                 <Badge tone={LEAD_TONE[l.status] ?? "neutral"}>
-                  {l.status.replace(/_/g, " ")}
+                  {LEAD_LABEL[l.status] ?? l.status}
                 </Badge>
               </li>
             ))}

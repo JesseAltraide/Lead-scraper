@@ -35,7 +35,7 @@ export default async function HomePage() {
         <Card>
           <CardHeader
             title="You have a run in progress"
-            meta={<Badge tone={active.spec.tone}>{active.status.replace(/_/g, " ")}</Badge>}
+            meta={<Badge tone={active.spec.tone}>{active.spec.label}</Badge>}
           />
           <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
             <p className="text-sm text-[var(--text-muted)]">
@@ -86,7 +86,7 @@ export default async function HomePage() {
                       </p>
                     </div>
                     <Badge tone={status ? RUN_STATES[status].tone : "neutral"}>
-                      {String(r.status).replace(/_/g, " ")}
+                      {status ? RUN_STATES[status].label : String(r.status)}
                     </Badge>
                   </Link>
                 </li>

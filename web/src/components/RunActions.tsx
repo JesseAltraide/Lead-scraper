@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { actionsFor, type RunAction, type RunStatus } from "@/lib/runStates";
+import { useRouter } from "next/navigation";
+import { actionsFor, type RunAction, type RunContext, type RunStatus } from "@/lib/runStates";
 import { useLiveRun } from "./useLiveRun";
 
 /**
@@ -30,6 +31,7 @@ function classesFor(tone: RunAction["tone"]) {
 export function RunActions({
   runId,
   status,
+  ctx,
   changeKey,
   live,
   /**
@@ -44,20 +46,26 @@ export function RunActions({
 }: {
   runId: string;
   status: RunStatus;
+  ctx: RunContext;
   changeKey: string;
   live: boolean;
   blocked?: Partial<Record<string, string>>;
   payloadFor?: (actionId: string) => unknown;
 }) {
+  const router = useRouter();
   const { stalled, staleSeconds, refreshNow } = useLiveRun({ enabled: live, changeKey });
   const [pending, setPending] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const actions = actionsFor(status);
+  const actions = actionsFor(status, ctx);
 
   async function run(action: RunAction) {
     if (action.endpoint === null) {
+      if (action.href) {
+        router.push(action.href);
+        return;
+      }
       document.getElementById("review")?.scrollIntoView({ behavior: "smooth" });
       return;
     }

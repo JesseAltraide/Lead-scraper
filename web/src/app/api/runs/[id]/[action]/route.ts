@@ -3,6 +3,7 @@ import { serverClient, serviceClient, requireUser } from "@/lib/supabase-server"
 import {
   actionAllowed,
   isRunStatus,
+  RUN_STATES,
   type RunActionId,
   type RunStatus,
 } from "@/lib/runStates";
@@ -67,11 +68,20 @@ export async function POST(
 
   const status: RunStatus = run.status;
 
-  // THE check. Same table, same status field, as the UI.
-  if (!actionAllowed(status, actionId)) {
+  // The same context the screen builds, from the same row — so the button the
+  // user sees and the action the server permits are decided identically.
+  const { count: leadCount } = await supabase
+    .from("leads")
+    .select("id", { count: "exact", head: true })
+    .eq("run_id", id);
+
+  const ctx = { hasIcp: Boolean(run.icp), hasLeads: (leadCount ?? 0) > 0 };
+
+  // THE check. Same table, same status field, same context, as the UI.
+  if (!actionAllowed(status, actionId, ctx)) {
     return NextResponse.json(
       {
-        error: `That can't be done while the run is "${status.replace(/_/g, " ")}". Refresh to see the current options.`,
+        error: `That isn't possible right now (${RUN_STATES[status].label}). Refresh to see what you can do.`,
       },
       { status: 409 },
     );

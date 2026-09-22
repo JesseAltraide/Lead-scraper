@@ -63,6 +63,7 @@ export function ClarifyForm({
         <RunActions
           runId={runId}
           status={status}
+          ctx={{ hasIcp: false, hasLeads: false }}
           changeKey={changeKey}
           live={false}
           blocked={blocked}

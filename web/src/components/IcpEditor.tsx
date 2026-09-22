@@ -179,6 +179,7 @@ export function IcpEditor({
         <RunActions
           runId={runId}
           status={status}
+          ctx={{ hasIcp: true, hasLeads: false }}
           changeKey={changeKey}
           live={false}
           blocked={blocked}
