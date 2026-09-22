@@ -14,6 +14,7 @@ const STAGE_LABEL: Record<string, { text: string; tone: string }> = {
   excluded_no_website: { text: "Excluded — no website", tone: "neutral" },
   screened_out: { text: "Screened out on search data", tone: "neutral" },
   queued: { text: "Queued to read", tone: "working" },
+  scraping: { text: "Reading website…", tone: "working" },
   scraped: { text: "Website read", tone: "working" },
   scrape_failed: { text: "Website couldn't be read", tone: "partial" },
   qualified_done: { text: "Qualified", tone: "done" },

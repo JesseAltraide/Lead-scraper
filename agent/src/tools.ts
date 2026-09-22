@@ -224,7 +224,20 @@ const scrapeImpl = wrapTool(
     const safePath = (args.path ?? "").replace(/^https?:\/\/[^/]*/i, "").replace(/^\/+/, "");
     const url = `https://${candidate.domain}/${safePath}`;
 
-    const result = await scrapeCached(url);
+    let result;
+    try {
+      result = await scrapeCached(url);
+    } catch (err) {
+      // The scrape threw before producing any result. Release the claim rather
+      // than leaving the candidate stuck in `scraping` until the stale window
+      // passes — claiming and then failing without releasing is how work gets
+      // silently discarded.
+      await rpc("release_scrape_claim", {
+        p_candidate_id: candidate.id,
+        p_reason: "A previous read attempt failed before it started; requeued.",
+      }).catch(() => {});
+      throw err;
+    }
 
     if (!result.ok) {
       await db
