@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { canonicalPlace } from "./geography";
 
 /**
  * Phase 1, Step 1 — the intake form.
@@ -84,7 +85,16 @@ export const intakeFormSchema = z
     // Industry, geography and company size are AUTOMATIC hard filters — they
     // have their own fields, so they must not also be typed into Must have.
     industry: nonEmpty("Industry"),
-    geography: nonEmpty("Geography"),
+    // Checked against a list of real countries and regions — free, instant and
+    // certain, so no AI call is spent discovering that "nowhere" isn't a place.
+    // The stored value is canonical ("United States", not "usa"), which the
+    // company search then uses as its filter.
+    geography: nonEmpty("Geography")
+      .refine((v) => canonicalPlace(v) !== null, {
+        message:
+          "That isn't a place we can search. Use a country or region — for somewhere more specific like a state or city, add it under Must have instead.",
+      })
+      .transform((v) => canonicalPlace(v) ?? v),
     minEmployees: z.coerce.number().int().positive("Min employees must be a positive whole number"),
     maxEmployees: z.coerce.number().int().positive("Max employees must be a positive whole number"),
 

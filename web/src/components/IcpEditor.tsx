@@ -5,6 +5,7 @@ import type { Icp } from "@/lib/icp";
 import type { RunStatus } from "@/lib/runStates";
 import { RunActions } from "./RunActions";
 import { Field, inputClass } from "./ui";
+import { KNOWN_PLACES, isKnownPlace } from "@/lib/geography";
 
 /**
  * The confirm-and-edit screen at `icp_ready`.
@@ -35,6 +36,7 @@ export function IcpEditor({
 
   const sizeInvalid = draft.minEmployees >= draft.maxEmployees;
   const emptyHardFilter = draft.hardFilters.some((f) => !f.text.trim());
+  const geographyInvalid = !isKnownPlace(draft.geography);
 
   /**
    * Reasons an action can't be taken, shown on the disabled button rather than
@@ -43,14 +45,19 @@ export function IcpEditor({
    * a hard filter can always be removed, only adding a blank one is stopped.
    */
   const blocked: Record<string, string | undefined> = {
-    start_research: sizeInvalid
-      ? "Minimum employees must be below the maximum."
+    start_research: geographyInvalid
+      ? "Geography isn't a place we can search — pick a country or region."
+      : sizeInvalid
+        ? "Minimum employees must be below the maximum."
       : emptyHardFilter
         ? "One of the hard filters is empty — fill it in or remove it."
         : dirty
           ? "You have unsaved edits. Save them first so research uses the version you're looking at."
           : undefined,
-    edit_icp: sizeInvalid || emptyHardFilter ? "Fix the highlighted fields first." : undefined,
+    edit_icp:
+      sizeInvalid || emptyHardFilter || geographyInvalid
+        ? "Fix the highlighted fields first."
+        : undefined,
   };
 
   return (
@@ -63,12 +70,22 @@ export function IcpEditor({
             onChange={(e) => update("industry", e.target.value)}
           />
         </Field>
-        <Field label="Geography">
+        <Field
+          label="Geography"
+          error={geographyInvalid ? "That isn't a place we can search." : undefined}
+        >
           <input
             className={inputClass}
+            list="known-places-icp"
+            autoComplete="off"
             value={draft.geography}
             onChange={(e) => update("geography", e.target.value)}
           />
+          <datalist id="known-places-icp">
+            {KNOWN_PLACES.map((place) => (
+              <option key={place} value={place} />
+            ))}
+          </datalist>
         </Field>
         <Field
           label="Employees"

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { intakeFormSchema } from "@/lib/icp";
+import { KNOWN_PLACES } from "@/lib/geography";
 import { Card, CardHeader, Field, inputClass } from "@/components/ui";
 
 /**
@@ -108,13 +109,25 @@ export function IntakeForm() {
             />
           </Field>
 
-          <Field label="Geography" error={errors.geography}>
+          <Field
+            label="Geography"
+            hint="A country or region. For a state or city, use Must have instead."
+            error={errors.geography}
+          >
             <input
               className={inputClass}
               placeholder="United States"
+              list="known-places"
+              autoComplete="off"
               value={values.geography}
               onChange={(e) => set("geography", e.target.value)}
             />
+            {/* Showing the valid answers beats making the user guess at them. */}
+            <datalist id="known-places">
+              {KNOWN_PLACES.map((place) => (
+                <option key={place} value={place} />
+              ))}
+            </datalist>
           </Field>
 
           <Field
