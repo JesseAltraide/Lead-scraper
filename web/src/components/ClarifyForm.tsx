@@ -103,7 +103,7 @@ export function ClarifyForm({
 
           <p className="mt-3 text-xs text-[var(--text-muted)]">
             Change whichever one you meant differently. No company could match both as written, so
-            the search can't run until one changes.
+            the search can&apos;t run until one changes.
           </p>
 
           <div className="mt-3 space-y-3">

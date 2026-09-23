@@ -57,11 +57,11 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
           <CardHeader title="This run is in an unrecognised state" />
           <div className="px-5 py-6 text-sm text-[var(--text-muted)]">
             <p>
-              The run's status is <code className="font-mono">{String(run.status)}</code>, which has
+              The run&apos;s status is <code className="font-mono">{String(run.status)}</code>, which has
               no screen defined for it. This is a bug, not something you did.
             </p>
             <p className="mt-3">
-              Nothing has been lost — the run's records are still in the database. Please report the
+              Nothing has been lost — the run&apos;s records are still in the database. Please report the
               run id <code className="font-mono">{run.id}</code>.
             </p>
           </div>
@@ -267,9 +267,9 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
           </ul>
           {needsReview.length > 0 ? (
             <p className="border-t border-[var(--border)] px-5 py-3 text-xs text-[var(--text-muted)]">
-              Leads needing review are shown with their evidence but can't be promoted to qualified
+              Leads needing review are shown with their evidence but can&apos;t be promoted to qualified
               here — a qualified lead needs every hard filter confirmed, and promoting one by hand
-              would create a “qualified” lead with nothing behind it. They don't count toward the
+              would create a “qualified” lead with nothing behind it. They don&apos;t count toward the
               target.
             </p>
           ) : null}

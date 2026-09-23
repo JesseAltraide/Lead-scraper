@@ -70,9 +70,11 @@ async function userId(): Promise<string> {
 
 const ICP = {
   industry: "B2B SaaS",
+  industryId: "4", // "Software Development" — nearest LinkedIn taxonomy match to "B2B SaaS"
   geography: "United States",
   minEmployees: 10,
   maxEmployees: 100,
+  companySizeBand: "51-200", // nearest actor band to this fixture's 10-100 range
   buyerPersona: "Head of Operations",
   businessProblem: "Manual data entry between systems.",
   hardFilters: [

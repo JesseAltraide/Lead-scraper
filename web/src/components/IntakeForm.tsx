@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { intakeFormSchema } from "@/lib/icp";
+import { intakeFormSchema, COMPANY_SIZE_BANDS } from "@/lib/icp";
 import { KNOWN_PLACES } from "@/lib/geography";
 import { Card, CardHeader, Field, inputClass } from "@/components/ui";
 
@@ -15,11 +15,12 @@ import { Card, CardHeader, Field, inputClass } from "@/components/ui";
  * the top that leaves the user hunting.
  */
 
+const DEFAULT_SIZE_BAND = "11-50";
+
 const EMPTY = {
   industry: "",
   geography: "",
-  minEmployees: "10",
-  maxEmployees: "100",
+  companySizeBand: DEFAULT_SIZE_BAND,
   buyerPersona: "",
   businessProblem: "",
   leadsWanted: "10",
@@ -49,8 +50,11 @@ export function IntakeForm() {
     e.preventDefault();
     setSubmitError(null);
 
+    const band = COMPANY_SIZE_BANDS.find((b) => b.label === values.companySizeBand);
     const parsed = intakeFormSchema.safeParse({
       ...values,
+      minEmployees: band?.min,
+      maxEmployees: band?.max,
       mustHave,
       niceToHave,
       skipIf,
@@ -132,25 +136,20 @@ export function IntakeForm() {
 
           <Field
             label="Employees"
+            hint="The search provider only filters by these exact bands."
             error={errors.minEmployees ?? errors.maxEmployees}
           >
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min={1}
-                className={inputClass}
-                value={values.minEmployees}
-                onChange={(e) => set("minEmployees", e.target.value)}
-              />
-              <span className="text-sm text-[var(--text-muted)]">to</span>
-              <input
-                type="number"
-                min={1}
-                className={inputClass}
-                value={values.maxEmployees}
-                onChange={(e) => set("maxEmployees", e.target.value)}
-              />
-            </div>
+            <select
+              className={inputClass}
+              value={values.companySizeBand}
+              onChange={(e) => set("companySizeBand", e.target.value)}
+            >
+              {COMPANY_SIZE_BANDS.map((band) => (
+                <option key={band.label} value={band.label}>
+                  {band.label} employees
+                </option>
+              ))}
+            </select>
           </Field>
 
           <Field label="Leads wanted" hint="1–10." error={errors.leadsWanted}>
@@ -247,7 +246,7 @@ export function IntakeForm() {
           {pending ? "Checking your form…" : "Continue"}
         </button>
         <p className="text-xs text-[var(--text-muted)]">
-          Nothing is searched or spent yet — you'll confirm the criteria first.
+          Nothing is searched or spent yet — you&apos;ll confirm the criteria first.
         </p>
       </div>
     </form>

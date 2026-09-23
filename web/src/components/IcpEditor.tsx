@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import type { Icp } from "@/lib/icp";
+import { COMPANY_SIZE_BANDS, companySizeBandFor, type Icp } from "@/lib/icp";
 import type { RunStatus } from "@/lib/runStates";
 import { RunActions } from "./RunActions";
 import { Field, inputClass } from "./ui";
 import { KNOWN_PLACES, isKnownPlace } from "@/lib/geography";
+import { canonicalIndustry } from "@/lib/industries";
 
 /**
  * The confirm-and-edit screen at `icp_ready`.
@@ -35,8 +36,22 @@ export function IcpEditor({
   }
 
   const sizeInvalid = draft.minEmployees >= draft.maxEmployees;
+  const sizeBand = companySizeBandFor(draft.minEmployees, draft.maxEmployees);
+
+  function setSizeBand(label: string) {
+    const band = COMPANY_SIZE_BANDS.find((b) => b.label === label);
+    if (!band) return;
+    // Both bounds always come from the same band, so this can never land on
+    // an invalid min >= max pair the way free-typed min/max fields could.
+    setDraft((d) => ({ ...d, minEmployees: band.min, maxEmployees: band.max }));
+    setDirty(true);
+  }
   const emptyHardFilter = draft.hardFilters.some((f) => !f.text.trim());
   const geographyInvalid = !isKnownPlace(draft.geography);
+  // Same shape as geography: the search actor filters by a numeric industry
+  // id, so a retyped industry has to still resolve to one before this ICP
+  // can be saved (Decision #55).
+  const industryInvalid = canonicalIndustry(draft.industry) === null;
 
   /**
    * Reasons an action can't be taken, shown on the disabled button rather than
@@ -44,18 +59,29 @@ export function IcpEditor({
    * action the status table allows, and they never trap an existing value:
    * a hard filter can always be removed, only adding a blank one is stopped.
    */
+  // A range can be a perfectly valid min < max pair and still not be one of
+  // the actor's fixed bands (e.g. a legacy or directly-API-written ICP) — the
+  // server already refuses that (icpSchema), but refusing it only after a
+  // click would violate this codebase's own UI-honesty rule ("show the
+  // refusal before the click, not after"), so it has to block here too.
+  const sizeOffBand = !sizeInvalid && sizeBand === null;
+
   const blocked: Record<string, string | undefined> = {
     start_research: geographyInvalid
       ? "Geography isn't a place we can search — pick a country or region."
+      : industryInvalid
+        ? "That industry isn't one the search recognises."
       : sizeInvalid
         ? "Minimum employees must be below the maximum."
+      : sizeOffBand
+        ? "Pick one of the listed employee ranges."
       : emptyHardFilter
         ? "One of the hard filters is empty — fill it in or remove it."
         : dirty
           ? "You have unsaved edits. Save them first so research uses the version you're looking at."
           : undefined,
     edit_icp:
-      sizeInvalid || emptyHardFilter || geographyInvalid
+      sizeInvalid || sizeOffBand || emptyHardFilter || geographyInvalid || industryInvalid
         ? "Fix the highlighted fields first."
         : undefined,
   };
@@ -63,7 +89,10 @@ export function IcpEditor({
   return (
     <div className="space-y-5">
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Industry">
+        <Field
+          label="Industry"
+          error={industryInvalid ? "That isn't an industry the search recognises." : undefined}
+        >
           <input
             className={inputClass}
             value={draft.industry}
@@ -89,25 +118,31 @@ export function IcpEditor({
         </Field>
         <Field
           label="Employees"
-          error={sizeInvalid ? "Minimum must be below the maximum." : undefined}
+          hint="The search provider only filters by these exact bands."
+          error={
+            sizeInvalid
+              ? "Minimum must be below the maximum."
+              : sizeOffBand
+                ? "Pick one of the listed employee ranges."
+                : undefined
+          }
         >
-          <div className="flex items-center gap-2">
-            <input
-              type="number"
-              min={1}
-              className={inputClass}
-              value={draft.minEmployees}
-              onChange={(e) => update("minEmployees", Number(e.target.value))}
-            />
-            <span className="text-sm text-[var(--text-muted)]">to</span>
-            <input
-              type="number"
-              min={1}
-              className={inputClass}
-              value={draft.maxEmployees}
-              onChange={(e) => update("maxEmployees", Number(e.target.value))}
-            />
-          </div>
+          <select
+            className={inputClass}
+            value={sizeBand ?? ""}
+            onChange={(e) => setSizeBand(e.target.value)}
+          >
+            {sizeBand === null ? (
+              <option value="" disabled>
+                Custom range ({draft.minEmployees}–{draft.maxEmployees}) — pick a band
+              </option>
+            ) : null}
+            {COMPANY_SIZE_BANDS.map((band) => (
+              <option key={band.label} value={band.label}>
+                {band.label} employees
+              </option>
+            ))}
+          </select>
         </Field>
         <Field
           label="Buyer persona"
@@ -200,7 +235,21 @@ export function IcpEditor({
           changeKey={changeKey}
           live={false}
           blocked={blocked}
-          payloadFor={() => ({ icp: draft })}
+          payloadFor={() => {
+            // The button that reaches here is disabled while industryInvalid
+            // or sizeInvalid is true, so these should always resolve — the
+            // `?? draft.x` fallback only guards the type, not a real path.
+            const industryEntry = canonicalIndustry(draft.industry);
+            const band = companySizeBandFor(draft.minEmployees, draft.maxEmployees);
+            return {
+              icp: {
+                ...draft,
+                industry: industryEntry?.label ?? draft.industry,
+                industryId: industryEntry?.id ?? draft.industryId,
+                companySizeBand: band ?? draft.companySizeBand,
+              },
+            };
+          }}
         />
       </div>
     </div>

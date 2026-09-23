@@ -40,7 +40,7 @@ export default async function HomePage() {
           <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
             <p className="text-sm text-[var(--text-muted)]">
               {active.spec.headline}. Only one run can be active at a time —
-              the Apify budget is shared, so two at once is how one person's share becomes two.
+              the Apify budget is shared, so two at once is how one person&apos;s share becomes two.
             </p>
             <Link
               href={`/runs/${active.id}`}
@@ -55,7 +55,7 @@ export default async function HomePage() {
           <header>
             <h1 className="text-xl font-semibold tracking-tight">New research run</h1>
             <p className="mt-1 max-w-2xl text-sm text-[var(--text-muted)]">
-              Describe the companies you want. You'll confirm the criteria before anything is
+              Describe the companies you want. You&apos;ll confirm the criteria before anything is
               searched, and every draft it writes is for you to review — nothing is ever sent.
             </p>
           </header>

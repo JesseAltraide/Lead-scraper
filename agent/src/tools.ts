@@ -69,9 +69,16 @@ const discoverImpl = wrapTool(
 
     const icp = run.icp as {
       industry: string;
+      // The search actor's own numeric industry id and company-size band
+      // string. Resolved once on the web side at ICP save time (the 434-row
+      // taxonomy that produces industryId lives only in web/, which this
+      // package cannot import — see progress.md Decision #55) — never
+      // re-derived here.
+      industryId: string;
       geography: string;
       minEmployees: number;
       maxEmployees: number;
+      companySizeBand: string;
     };
 
     // THE rule from the PRD. The agent may state a number; it is recorded and
@@ -85,9 +92,11 @@ const discoverImpl = wrapTool(
 
     const { companies, cached } = await searchCompaniesCached({
       industry: icp.industry,
+      industryId: icp.industryId,
       geography: icp.geography,
       minEmployees: icp.minEmployees,
       maxEmployees: icp.maxEmployees,
+      companySizeBand: icp.companySizeBand,
       maxItems: granted,
     });
 

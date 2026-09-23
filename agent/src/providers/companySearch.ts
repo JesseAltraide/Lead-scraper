@@ -14,9 +14,13 @@ import { normalizeDomain, toInt, cleanString } from "../normalize.js";
 
 export type CompanySearchQuery = {
   industry: string;
+  /** The actor's own numeric industry id, e.g. "4" for Software Development. */
+  industryId: string;
   geography: string;
   minEmployees: number;
   maxEmployees: number;
+  /** The actor's own band string, e.g. "11-50" — not a min/max pair. */
+  companySizeBand: string;
   /** The hard cap. Read from the run record by the tool — never from agent input. */
   maxItems: number;
 };
@@ -42,13 +46,45 @@ function queryHash(q: CompanySearchQuery, providerName: string): string {
       JSON.stringify([
         providerName,
         q.industry.toLowerCase().trim(),
+        q.industryId,
         q.geography.toLowerCase().trim(),
         q.minEmployees,
         q.maxEmployees,
+        q.companySizeBand,
         q.maxItems,
       ]),
     )
     .digest("hex");
+}
+
+/**
+ * The confirmed actor's location is an array of office records, not a flat
+ * field — `[{ country, city, headquarter: boolean, parsed: {...} }]`. Prefer
+ * the entry actually marked headquarters (a company can list a dozen
+ * branches); fall back to the first entry if none is marked, rather than
+ * dropping location entirely.
+ */
+function pickLocationFromArray(rec: Record<string, unknown>): string | null {
+  const locations = rec["locations"];
+  if (!Array.isArray(locations) || locations.length === 0) return null;
+
+  const hq =
+    (locations.find((l) => (l as Record<string, unknown>)?.["headquarter"] === true) ??
+      locations[0]) as Record<string, unknown>;
+  const parsed = (hq["parsed"] ?? {}) as Record<string, unknown>;
+
+  const city = parsed["city"] ?? hq["city"];
+  const country = parsed["countryFull"] ?? parsed["country"] ?? hq["country"];
+  const parts = [city, country].filter((p): p is string => typeof p === "string" && p.length > 0);
+  return parts.length > 0 ? parts.join(", ") : null;
+}
+
+/** The confirmed actor's industry is `[{ id, name }]`, not a flat field. */
+function pickIndustryFromArray(rec: Record<string, unknown>): string | null {
+  const industries = rec["industries"];
+  if (!Array.isArray(industries) || industries.length === 0) return null;
+  const name = (industries[0] as Record<string, unknown>)?.["name"];
+  return typeof name === "string" && name.length > 0 ? name : null;
 }
 
 /** Maps one raw actor record into our shape, tolerating field-name variation. */
@@ -66,8 +102,14 @@ function mapRecord(rec: Record<string, unknown>): DiscoveredCompany {
     employeeCount: toInt(
       pick("employeeCount", "employees", "employeesCount", "numberOfEmployees", "size"),
     ),
-    location: cleanString(pick("location", "country", "hqLocation", "city", "address")) || null,
-    industry: cleanString(pick("industry", "sector", "category")) || null,
+    // Try the array shape the confirmed actor actually returns first; the
+    // flat-key guesses stay as a fallback for the fixture provider and any
+    // future actor swap that does use flat fields.
+    location:
+      pickLocationFromArray(rec) ??
+      (cleanString(pick("location", "country", "hqLocation", "city", "address")) || null),
+    industry:
+      pickIndustryFromArray(rec) ?? (cleanString(pick("industry", "sector", "category")) || null),
     description: cleanString(pick("description", "summary", "shortDescription", "about")) || null,
     raw: rec,
   };
@@ -86,22 +128,22 @@ class ApifyProvider implements CompanySearchProvider {
       `https://api.apify.com/v2/acts/${encodeURIComponent(env.apifyActorId!)}` +
       `/run-sync-get-dataset-items?token=${encodeURIComponent(env.apifyToken!)}`;
 
+    // The actor's confirmed real input shape — verified against a live test
+    // call, not guessed. companySize and industryIds are the actor's own
+    // fixed values (a band string, a numeric id as a string), not the
+    // min/max pair or free-text industry name the rest of this codebase
+    // otherwise uses.
     const input = {
-      // The cap, under every name actors commonly use for it. Passing all of
-      // them is harmless (unknown fields are ignored) and removes the chance
-      // of an uncapped run because the actor called it something else.
+      companySize: [query.companySizeBand],
+      industryIds: [query.industryId],
+      locations: [query.geography],
       maxItems: query.maxItems,
-      maxResults: query.maxItems,
-      resultsPerSearch: query.maxItems,
-      limit: query.maxItems,
-
-      industry: query.industry,
-      location: query.geography,
-      minEmployees: query.minEmployees,
-      maxEmployees: query.maxEmployees,
-      searchQuery:
-        `${query.industry} companies in ${query.geography} ` +
-        `with ${query.minEmployees}-${query.maxEmployees} employees`,
+      scraperMode: "full",
+      // Soft signal only — the actor matches this against a company's own
+      // description, not the problem a prospect has, so keeping it to the
+      // industry label avoids the query pointing at competitors instead of
+      // prospects. See progress.md for the fuller reasoning.
+      searchQuery: query.industry,
     };
 
     const res = await fetch(url, {

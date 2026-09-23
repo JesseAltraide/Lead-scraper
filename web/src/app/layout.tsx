@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import Link from "next/link";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -14,9 +15,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body className="flex min-h-full flex-col">
         <div className="border-b border-[var(--border)]">
           <div className="mx-auto flex max-w-4xl items-center justify-between px-5 py-3">
-            <a href="/" className="text-sm font-semibold tracking-tight">
+            <Link href="/" className="text-sm font-semibold tracking-tight">
               Lead Research Agent
-            </a>
+            </Link>
             {/* Stated plainly and permanently: there is no send button anywhere
                 in this application, and no tool exists that could add one. */}
             <span className="text-xs text-[var(--text-muted)]">Drafts only — nothing is sent</span>
