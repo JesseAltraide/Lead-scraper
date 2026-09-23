@@ -3,7 +3,7 @@ import { serverClient, requireUser } from "@/lib/supabase-server";
 import { RUN_STATES, isRunStatus, type RunStatus } from "@/lib/runStates";
 import { Badge, Card, CardHeader, EmptyState } from "@/components/ui";
 import { RunActions } from "@/components/RunActions";
-import { IcpEditor } from "@/components/IcpEditor";
+import { IcpSummary } from "@/components/IcpSummary";
 import { ClarifyForm } from "@/components/ClarifyForm";
 import type { Icp } from "@/lib/icp";
 import type { ClarificationItem } from "@/lib/clarityCheck";
@@ -147,9 +147,9 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
 
       {status === "icp_ready" && ctx.hasIcp ? (
         <Card>
-          <CardHeader title="What we'll search for" meta="Editable until you start" />
+          <CardHeader title="What we'll search for" meta="Checked and ready — view only" />
           <div className="px-5 py-5">
-            <IcpEditor runId={id} status={status} icp={run.icp as Icp} changeKey={changeKey} />
+            <IcpSummary runId={id} status={status} icp={run.icp as Icp} changeKey={changeKey} />
           </div>
         </Card>
       ) : status === "awaiting_clarification" ? (

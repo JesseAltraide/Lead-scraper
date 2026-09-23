@@ -7,7 +7,7 @@ import {
   type RunActionId,
   type RunStatus,
 } from "@/lib/runStates";
-import { icpSchema, intakeFormSchema } from "@/lib/icp";
+import { intakeFormSchema } from "@/lib/icp";
 import {
   runClarityCheck,
   blockerResolved,
@@ -30,7 +30,6 @@ import {
 const ENDPOINT_TO_ACTION: Record<string, RunActionId> = {
   cancel: "cancel",
   clarify: "answer_clarification",
-  icp: "edit_icp",
   start: "start_research",
   stop: "stop_run",
   retry: "retry",
@@ -134,42 +133,15 @@ export async function POST(
     }
 
     // -----------------------------------------------------------------------
-    case "edit_icp": {
-      const parsed = icpSchema.safeParse((body as { icp?: unknown })?.icp);
-      if (!parsed.success) {
-        return NextResponse.json(
-          { error: `That ICP isn't valid: ${parsed.error.issues[0]?.message ?? "unknown problem"}` },
-          { status: 400 },
-        );
-      }
-
-      const { data } = await db
-        .from("runs")
-        .update({ icp: parsed.data, icp_finalized_at: new Date().toISOString() })
-        .eq("id", id)
-        .eq("status", "icp_ready")
-        .select("id")
-        .maybeSingle();
-
-      if (!data) return conflict();
-      await event(db, id, "note", null, "ICP edited before research started.");
-      return NextResponse.json({ ok: true });
-    }
-
-    // -----------------------------------------------------------------------
     case "start_research": {
-      // Saved edits come with the request, so starting always uses the version
-      // the user is actually looking at.
-      const parsed = icpSchema.safeParse((body as { icp?: unknown })?.icp);
-      if (parsed.success) {
-        await db
-          .from("runs")
-          .update({ icp: parsed.data, icp_finalized_at: new Date().toISOString() })
-          .eq("id", id)
-          .eq("status", "icp_ready");
-      }
-
-      if (!run.icp && !parsed.success) {
+      // icp_ready is view-only (Decision #61 — PRD.md doesn't specify editing
+      // here, unlike week5-full-flow.md's original design). Deliberately does
+      // NOT accept an `icp` override from the request body any more: every
+      // value on `run.icp` already passed the same validation the intake
+      // form enforces, so there is nothing here for a client to legitimately
+      // improve on, and accepting one would let a direct API call edit the
+      // ICP the UI no longer offers a way to edit.
+      if (!run.icp) {
         return NextResponse.json(
           { error: "This run has no finalised ICP yet, so research can't start." },
           { status: 409 },
@@ -199,11 +171,12 @@ export async function POST(
 
     // -----------------------------------------------------------------------
     case "start_over": {
-      // Returns to the ICP screen so the user can change what's searched for.
-      // It deliberately does NOT delete the candidates or leads already found —
-      // a recovery action that destroys the only way forward is the bug this
-      // whole section exists to avoid. Dedupe and the caches mean the kept work
-      // is reused, not paid for twice.
+      // Returns to the icp_ready confirm screen for a second look at the same
+      // criteria before resuming — NOT to change them, since that screen is
+      // view-only (Decision #61). It deliberately does NOT delete the
+      // candidates or leads already found — a recovery action that destroys
+      // the only way forward is the bug this whole section exists to avoid.
+      // Dedupe and the caches mean the kept work is reused, not paid for twice.
       const { data } = await db
         .from("runs")
         .update({ status: "icp_ready", failure_reason: null, failed_step: null })
@@ -277,15 +250,13 @@ export async function POST(
         );
       }
 
-      if (run.clarification_rounds >= 3) {
-        return NextResponse.json(
-          {
-            error:
-              "That's three rounds of questions. Start a new search rather than going round again — nothing here has been spent.",
-          },
-          { status: 409 },
-        );
-      }
+      // The 3-round cap itself is enforced in runClarityCheck, at the point a
+      // 4th round would be CREATED — not here, at the point of answering one.
+      // By the time a 4th-round submit could ever reach this handler the run
+      // would already be `cancelled` (see clarityCheck.ts's
+      // giveUpAfterMaxRounds), which the actionAllowed check above already
+      // refuses with a clearer reason. Nothing reachable here needs a
+      // separate round-count guard.
 
       const { data } = await db
         .from("runs")

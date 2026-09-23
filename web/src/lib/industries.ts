@@ -455,7 +455,24 @@ export const KNOWN_INDUSTRIES: string[] = INDUSTRIES.map((i) => i.label);
 const LOOKUP = new Map<string, IndustryEntry>();
 for (const entry of INDUSTRIES) LOOKUP.set(entry.label.toLowerCase(), entry);
 
-/** Common shorthand that doesn't appear as its own row in LinkedIn's taxonomy. */
+/**
+ * Common shorthand that doesn't appear as its own row in LinkedIn's taxonomy.
+ *
+ * KNOWN LIMITATION: this list is hand-picked, not learned. The actor's
+ * taxonomy is fixed (434 entries, no free text), so anything a user types
+ * that isn't already covered here gets rejected outright, however reasonable
+ * it sounds to them ("Schooling", "Consulting Firm", "Non-Profit"). Nothing
+ * in the running app currently records which inputs actually get rejected,
+ * so this list can only grow from guessing in advance, not from real usage.
+ *
+ * The fix, not yet built: log every rejected industry value (the raw input,
+ * not who typed it) the same way tool_calls already logs every agent
+ * action, and periodically review the most frequent misses to add as
+ * aliases here. That turns "we hope we covered the common cases" into "we
+ * know exactly what people typed and didn't match, ranked by frequency" —
+ * the same shift `suggestIndustries` below makes for a single rejection,
+ * applied over every rejection this form has ever produced.
+ */
 const ALIASES: Record<string, string> = {
   saas: "software development",
   "b2b saas": "software development",
@@ -468,6 +485,14 @@ const ALIASES: Record<string, string> = {
   edtech: "e-learning providers",
   ecommerce: "retail",
   "e-commerce": "retail",
+  // Found during this session's own testing of suggestIndustries: without
+  // this, "Non-Profit" only got a suggestion instead of resolving outright,
+  // despite being a near-exact match. Exactly the kind of miss the ALIASES
+  // limitation note above describes — caught this time by hand, ideally by
+  // monitored real input going forward.
+  "non-profit": "non-profit organizations",
+  nonprofit: "non-profit organizations",
+  "non profit": "non-profit organizations",
 };
 
 /**
@@ -483,4 +508,79 @@ export function canonicalIndustry(input: string): IndustryEntry | null {
 
 export function isKnownIndustry(input: string): boolean {
   return canonicalIndustry(input) !== null;
+}
+
+/** Classic edit-distance DP. 434 short labels is cheap enough to run per rejection. */
+function levenshtein(a: string, b: string): number {
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  let curr = new Array<number>(b.length + 1).fill(0);
+
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(
+        curr[j - 1]! + 1, // insertion
+        prev[j]! + 1, // deletion
+        prev[j - 1]! + cost, // substitution
+      );
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[b.length]!;
+}
+
+/** Strips a common suffix so "Schooling" can match labels containing "School". */
+function stem(word: string): string {
+  return word.replace(/(ing|ies|es|s)$/, "");
+}
+
+/**
+ * When nothing matches, suggest real entries instead of leaving the user to
+ * guess two hard-coded examples. Runs entirely in code, instantly, right
+ * where the rejection happens — no AI call, and the user never has to leave
+ * the intake form to get a useful answer.
+ *
+ * Two passes: a substring/stem match first (catches "Schooling" -> "School
+ * and Employee Bus Services", "Secretarial Schools", "Fine Arts Schools" —
+ * exactly the case this was built for), falling back to edit distance only
+ * when nothing shares a real word, so garbled input still gets *something*
+ * better than silence.
+ */
+export function suggestIndustries(input: string, max = 3): string[] {
+  const base = input.trim().toLowerCase();
+  if (!base) return [];
+
+  const words = base.split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+  const scored: { label: string; score: number }[] = [];
+
+  for (const label of KNOWN_INDUSTRIES) {
+    const lower = label.toLowerCase();
+    let score = 0;
+
+    for (const w of words) {
+      if (lower.includes(w)) score += w.length * 2; // a real word matched outright
+      const s = stem(w);
+      if (s.length >= 3 && s !== w && lower.includes(s)) score += s.length; // stemmed match
+    }
+
+    if (score === 0) {
+      // Only worth surfacing if it's in the right ballpark — otherwise a
+      // "closest" match from 434 options is just noise.
+      const distance = levenshtein(base, lower);
+      if (distance <= Math.max(4, Math.floor(lower.length * 0.4))) {
+        score = 1 / (distance + 1);
+      }
+    }
+
+    if (score > 0) scored.push({ label, score });
+  }
+
+  // Stable sort keeps the taxonomy's own (roughly alphabetical) order as the
+  // tiebreak, so equally-good matches come back in a consistent order.
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, max).map((s) => s.label);
 }

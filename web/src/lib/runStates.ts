@@ -31,7 +31,6 @@ export type RunStatus = (typeof RUN_STATUSES)[number];
 export type RunActionId =
   | "cancel"
   | "answer_clarification"
-  | "edit_icp"
   | "start_research"
   | "stop_run"
   | "retry"
@@ -87,11 +86,16 @@ const CANCEL: RunAction = {
 
 const START_OVER: RunAction = {
   id: "start_over",
-  label: "Change what we search for",
+  // Not "Change what we search for" — icp_ready is view-only (Decision #61),
+  // so this genuinely cannot change anything any more. It goes back to the
+  // confirm screen to review the same criteria before resuming, which is a
+  // real, different, non-misleading purpose: a second look before spending
+  // more, not an edit. Getting different criteria requires a new search.
+  label: "Review and continue",
   tone: "quiet",
   endpoint: "start-over",
   confirm:
-    "This takes you back to the criteria so you can change them. The companies already researched are kept and won't be paid for again.",
+    "This takes you back to the same criteria to review before continuing. The companies already researched are kept and won't be paid for again.",
 };
 
 const START_NEW: RunAction = {
@@ -136,13 +140,19 @@ export const RUN_STATES: Record<RunStatus, RunStateSpec> = {
   icp_ready: {
     label: "Ready to start",
     headline: "Check what we'll search for",
+    // View-only by design (per PRD.md, which is silent on editing here — see
+    // Decision #61): every field arriving at this screen has already passed
+    // the same validation the intake form enforces (industry taxonomy,
+    // persona vagueness/gibberish, size band, gibberish-free text on every
+    // free-text field), so there is no case where in-place editing was
+    // needed to fix an invalid value reaching here. Getting something
+    // different means starting over, not patching this screen.
     detail:
-      "This is what the search will actually use — not necessarily word-for-word what you typed. Change anything that looks wrong. Nothing has been searched or spent yet.",
+      "This is exactly what you answered, already checked and ready to search. Nothing has been spent yet.",
     tone: "waiting",
     live: false,
     actions: [
       { id: "start_research", label: "Start searching", tone: "primary", endpoint: "start" },
-      { id: "edit_icp", label: "Save changes", tone: "quiet", endpoint: "icp" },
       CANCEL,
     ],
   },
@@ -232,7 +242,6 @@ export const RUN_STATES: Record<RunStatus, RunStateSpec> = {
 export function actionsFor(status: RunStatus, ctx: RunContext): RunAction[] {
   const needsIcp: RunActionId[] = [
     "start_research",
-    "edit_icp",
     "retry",
     "continue_higher_limit",
     "start_over", // returns to the ICP screen, so it needs an ICP to return to

@@ -167,3 +167,54 @@ test("a citation with no URL but real overlap with the summary passes", () => {
   const r = checkCitation("They mention a dedicated support team", null, SOURCES, SUMMARY);
   assert.equal(r.ok, true);
 });
+
+// ---------------------------------------------------------------------------
+// mapRecord — headcount mapping, verified against real records the live
+// discovery call actually returned from harvestapi/linkedin-company-search
+// ---------------------------------------------------------------------------
+
+test("mapRecord derives employeeCount from employeeCountRange when no flat field exists", async () => {
+  const { mapRecord } = await import("./providers/mapCompanyRecord.js");
+  // A real record: no flat `employeeCount` at all, only the range LinkedIn
+  // itself displays. Before the fix this silently mapped to null.
+  const record = {
+    name: "Software Development & SEO Services",
+    website: "https://progneo.com/",
+    employeeCountRange: { start: 51, end: 200 },
+    locations: [{ headquarter: true, parsed: { city: "Las Vegas", countryFull: "United States of America" } }],
+    industries: [{ name: "Software Development" }],
+  };
+  const mapped = mapRecord(record);
+  assert.equal(mapped.employeeCount, 126, "midpoint of 51-200, rounded");
+});
+
+test("mapRecord prefers employeeCountRange over a disagreeing flat field", async () => {
+  const { mapRecord } = await import("./providers/mapCompanyRecord.js");
+  // A real record where the two fields the actor returns actually disagreed:
+  // flat employeeCount said 37, employeeCountRange said 51-200. The range is
+  // LinkedIn's own displayed bucket; the flat field looks like a separately
+  // scraped, less reliable estimate — so the range wins.
+  const record = {
+    name: "DevKit",
+    website: "https://devkit.agency",
+    employeeCount: 37,
+    employeeCountRange: { start: 51, end: 200 },
+  };
+  const mapped = mapRecord(record);
+  assert.equal(mapped.employeeCount, 126, "range wins over the disagreeing flat field");
+});
+
+test("mapRecord falls back to a flat field when no range is present", () => {
+  // The fixture provider's shape, and any future actor that only has a flat
+  // field — the fallback this codebase already relied on before the fix.
+  return import("./providers/mapCompanyRecord.js").then(({ mapRecord }) => {
+    const mapped = mapRecord({ name: "Fixture Co", employeeCount: 42 });
+    assert.equal(mapped.employeeCount, 42);
+  });
+});
+
+test("mapRecord returns null employeeCount when neither shape is present", async () => {
+  const { mapRecord } = await import("./providers/mapCompanyRecord.js");
+  const mapped = mapRecord({ name: "No Data Co" });
+  assert.equal(mapped.employeeCount, null);
+});

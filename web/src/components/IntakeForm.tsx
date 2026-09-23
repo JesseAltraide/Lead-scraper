@@ -4,7 +4,10 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { intakeFormSchema, COMPANY_SIZE_BANDS } from "@/lib/icp";
 import { KNOWN_PLACES } from "@/lib/geography";
+import { suggestIndustries } from "@/lib/industries";
+import { isGibberish } from "@/lib/gibberish";
 import { Card, CardHeader, Field, inputClass } from "@/components/ui";
+import { TaxonomyReportFlag } from "@/components/TaxonomyReportFlag";
 
 /**
  * Phase 1, Step 1.
@@ -16,6 +19,28 @@ import { Card, CardHeader, Field, inputClass } from "@/components/ui";
  */
 
 const DEFAULT_SIZE_BAND = "11-50";
+
+/**
+ * Visual top-to-bottom order of the fields that can carry a validation
+ * error — used to find the FIRST one actually on screen, not just the first
+ * one zod happened to report. zod's issue order roughly follows schema
+ * declaration order, which isn't guaranteed to match layout order (e.g. an
+ * object-level min<max refine can surface after later per-field issues).
+ */
+const FIELD_ORDER = [
+  "industry",
+  "geography",
+  "minEmployees",
+  "maxEmployees",
+  "leadsWanted",
+  "buyerPersona",
+  "businessProblem",
+  "notes",
+  // mustHave/niceToHave/skipIf are deliberately absent: TagInput already
+  // blocks adding a gibberish or duplicate item before it can ever enter the
+  // list (see canAdd below), so those fields cannot fail at submit time —
+  // nothing to scroll to that submit itself could produce.
+] as const;
 
 const EMPTY = {
   industry: "",
@@ -67,6 +92,20 @@ export function IntakeForm() {
         fieldErrors[key] ??= issue.message;
       }
       setErrors(fieldErrors);
+
+      // Scroll to whichever error is actually topmost on the page — a field
+      // several screens down otherwise fails silently as far as the user can
+      // tell, since nothing above the fold changed.
+      const firstBadField = FIELD_ORDER.find((key) => fieldErrors[key]);
+      if (firstBadField) {
+        // minEmployees and maxEmployees share one visual control (the size
+        // band dropdown); either error name resolves to the same element.
+        const elementId =
+          firstBadField === "maxEmployees" ? "field-minEmployees" : `field-${firstBadField}`;
+        const el = document.getElementById(elementId);
+        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+        el?.focus();
+      }
       return;
     }
 
@@ -106,11 +145,19 @@ export function IntakeForm() {
             error={errors.industry}
           >
             <input
+              id="field-industry"
               className={inputClass}
               placeholder="B2B SaaS"
               value={values.industry}
               onChange={(e) => set("industry", e.target.value)}
             />
+            {errors.industry ? (
+              <TaxonomyReportFlag
+                field="industry"
+                rawInput={values.industry}
+                suggestions={suggestIndustries(values.industry)}
+              />
+            ) : null}
           </Field>
 
           <Field
@@ -119,6 +166,7 @@ export function IntakeForm() {
             error={errors.geography}
           >
             <input
+              id="field-geography"
               className={inputClass}
               placeholder="United States"
               list="known-places"
@@ -140,6 +188,7 @@ export function IntakeForm() {
             error={errors.minEmployees ?? errors.maxEmployees}
           >
             <select
+              id="field-minEmployees"
               className={inputClass}
               value={values.companySizeBand}
               onChange={(e) => set("companySizeBand", e.target.value)}
@@ -154,6 +203,7 @@ export function IntakeForm() {
 
           <Field label="Leads wanted" hint="1–10." error={errors.leadsWanted}>
             <input
+              id="field-leadsWanted"
               type="number"
               min={1}
               max={10}
@@ -174,6 +224,7 @@ export function IntakeForm() {
             error={errors.buyerPersona}
           >
             <input
+              id="field-buyerPersona"
               className={inputClass}
               placeholder="Head of Operations"
               value={values.buyerPersona}
@@ -187,6 +238,7 @@ export function IntakeForm() {
             error={errors.businessProblem}
           >
             <textarea
+              id="field-businessProblem"
               className={`${inputClass} min-h-20`}
               placeholder="Ops teams losing hours a week to manual data entry between their CRM, billing and support tools."
               value={values.businessProblem}
@@ -217,8 +269,9 @@ export function IntakeForm() {
             items={skipIf}
             onChange={setSkipIf}
           />
-          <Field label="Anything else" hint="Optional.">
+          <Field label="Anything else" hint="Optional." error={errors.notes}>
             <textarea
+              id="field-notes"
               className={`${inputClass} min-h-16`}
               value={values.notes}
               onChange={(e) => set("notes", e.target.value)}
@@ -267,7 +320,8 @@ function TagInput({
   const [entry, setEntry] = useState("");
   const trimmed = entry.trim();
   const duplicate = items.some((i) => i.toLowerCase() === trimmed.toLowerCase());
-  const canAdd = trimmed.length > 0 && !duplicate;
+  const gibberish = trimmed.length > 0 && isGibberish(trimmed);
+  const canAdd = trimmed.length > 0 && !duplicate && !gibberish;
 
   function add() {
     if (!canAdd) return;
@@ -318,6 +372,10 @@ function TagInput({
           />
           {duplicate ? (
             <p className="mt-1 text-xs text-[var(--text-muted)]">Already in this list.</p>
+          ) : gibberish ? (
+            <p className="mt-1 text-xs" style={{ color: "var(--error)" }} role="alert">
+              That doesn&apos;t look like real text — check for typos or stray characters.
+            </p>
           ) : null}
         </div>
         <button

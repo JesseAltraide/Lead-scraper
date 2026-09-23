@@ -221,17 +221,36 @@ const scrapeImpl = wrapTool(
   "scrape_website",
   "Read a queued candidate's website with Firecrawl",
   async (args: { candidate_id: string; path?: string }, ctx: ToolContext) => {
+    // The path is constrained to a sub-path of the candidate's own domain. Built
+    // before the claim so the exact URL can be passed into it — a resumed run
+    // asking for a URL it already scraped gets that cached page back for free,
+    // with no new claim and no budget spend (migration 0006). Any other case is
+    // refused exactly as before; the domain lookup here is read-only and does
+    // not itself authorise anything.
+    const { data: domainRow } = await db
+      .from("candidates")
+      .select("domain")
+      .eq("id", args.candidate_id)
+      .eq("run_id", ctx.runId)
+      .maybeSingle();
+    if (!domainRow?.domain) {
+      // No candidate, wrong run, or no domain on record — nothing to build a
+      // real URL from. Fail clearly here rather than sending a garbage
+      // "https://undefined/..." URL into the claim below.
+      throw new Error(
+        `CANDIDATE_NOT_SCRAPEABLE: ${args.candidate_id} has no domain on record for this run`,
+      );
+    }
+    const safePath = (args.path ?? "").replace(/^https?:\/\/[^/]*/i, "").replace(/^\/+/, "");
+    const url = `https://${domainRow.domain}/${safePath}`;
+
     // Claims the scrape budget AND verifies the candidate belongs to this run
     // and is queued — in one atomic call. The agent cannot supply an arbitrary
     // URL, so a scraped page saying "now read this other site" goes nowhere.
     const candidate = await rpc<{ id: string; domain: string; company_name: string }>(
       "claim_scrape_budget",
-      { p_run_id: ctx.runId, p_candidate_id: args.candidate_id },
+      { p_run_id: ctx.runId, p_candidate_id: args.candidate_id, p_url: url },
     );
-
-    // The path is constrained to a sub-path of the candidate's own domain.
-    const safePath = (args.path ?? "").replace(/^https?:\/\/[^/]*/i, "").replace(/^\/+/, "");
-    const url = `https://${candidate.domain}/${safePath}`;
 
     let result;
     try {

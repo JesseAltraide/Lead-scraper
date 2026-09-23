@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { db } from "../db.js";
 import { env, liveDiscovery } from "../env.js";
-import { normalizeDomain, toInt, cleanString } from "../normalize.js";
+import { mapRecord } from "./mapCompanyRecord.js";
 
 /**
  * Company discovery. Apify only, per the PRD.
@@ -57,70 +57,13 @@ function queryHash(q: CompanySearchQuery, providerName: string): string {
     .digest("hex");
 }
 
-/**
- * The confirmed actor's location is an array of office records, not a flat
- * field — `[{ country, city, headquarter: boolean, parsed: {...} }]`. Prefer
- * the entry actually marked headquarters (a company can list a dozen
- * branches); fall back to the first entry if none is marked, rather than
- * dropping location entirely.
- */
-function pickLocationFromArray(rec: Record<string, unknown>): string | null {
-  const locations = rec["locations"];
-  if (!Array.isArray(locations) || locations.length === 0) return null;
-
-  const hq =
-    (locations.find((l) => (l as Record<string, unknown>)?.["headquarter"] === true) ??
-      locations[0]) as Record<string, unknown>;
-  const parsed = (hq["parsed"] ?? {}) as Record<string, unknown>;
-
-  const city = parsed["city"] ?? hq["city"];
-  const country = parsed["countryFull"] ?? parsed["country"] ?? hq["country"];
-  const parts = [city, country].filter((p): p is string => typeof p === "string" && p.length > 0);
-  return parts.length > 0 ? parts.join(", ") : null;
-}
-
-/** The confirmed actor's industry is `[{ id, name }]`, not a flat field. */
-function pickIndustryFromArray(rec: Record<string, unknown>): string | null {
-  const industries = rec["industries"];
-  if (!Array.isArray(industries) || industries.length === 0) return null;
-  const name = (industries[0] as Record<string, unknown>)?.["name"];
-  return typeof name === "string" && name.length > 0 ? name : null;
-}
-
-/** Maps one raw actor record into our shape, tolerating field-name variation. */
-function mapRecord(rec: Record<string, unknown>): DiscoveredCompany {
-  const pick = (...keys: string[]): unknown => {
-    for (const k of keys) if (rec[k] != null && rec[k] !== "") return rec[k];
-    return null;
-  };
-
-  const domainRaw = pick("domain", "website", "websiteUrl", "url", "companyWebsite");
-
-  return {
-    companyName: cleanString(pick("name", "companyName", "title", "organizationName")) || "(unnamed)",
-    domain: normalizeDomain(domainRaw),
-    employeeCount: toInt(
-      pick("employeeCount", "employees", "employeesCount", "numberOfEmployees", "size"),
-    ),
-    // Try the array shape the confirmed actor actually returns first; the
-    // flat-key guesses stay as a fallback for the fixture provider and any
-    // future actor swap that does use flat fields.
-    location:
-      pickLocationFromArray(rec) ??
-      (cleanString(pick("location", "country", "hqLocation", "city", "address")) || null),
-    industry:
-      pickIndustryFromArray(rec) ?? (cleanString(pick("industry", "sector", "category")) || null),
-    description: cleanString(pick("description", "summary", "shortDescription", "about")) || null,
-    raw: rec,
-  };
-}
 
 /**
  * The real actor. maxItems is passed on EVERY run — an uncapped actor input is
  * never constructed anywhere in this file. The token is the team account's,
  * read from the server environment.
  */
-class ApifyProvider implements CompanySearchProvider {
+export class ApifyProvider implements CompanySearchProvider {
   readonly name = "apify";
 
   async search(query: CompanySearchQuery): Promise<DiscoveredCompany[]> {
