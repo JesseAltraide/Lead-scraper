@@ -4,6 +4,7 @@ import {
   actionAllowed,
   isRunStatus,
   RUN_STATES,
+  MAX_CONTINUES,
   type RunActionId,
   type RunStatus,
 } from "@/lib/runStates";
@@ -39,8 +40,32 @@ const ENDPOINT_TO_ACTION: Record<string, RunActionId> = {
 
 const BREAK = String.fromCharCode(10);
 
-/** Raised limits for "continue with higher limits" on a partial run. */
-const RAISED_LIMITS = { max_candidates: 30, max_scrapes: 20, max_tool_calls: 80, max_agent_turns: 60 };
+/**
+ * What each "Keep searching" adds to the run's CURRENT limits — relative
+ * increments, not an absolute table.
+ *
+ * This was first a single flat constant (30/20 every time, meaning presses 2
+ * and 3 set the SAME numbers the run had already exhausted and did nothing),
+ * then a hardcoded ladder of absolute numbers (35 -> 40 -> 45). The ladder
+ * version broke the moment STARTING_LIMITS changed for testing: dropping the
+ * starting max_candidates to 4 for a small test run meant the first press
+ * jumped straight to 35 — an 8x jump, not the "+5 companies" the button
+ * implies. A hardcoded absolute table can only ever be correct for the one
+ * starting-limit value it was written against.
+ *
+ * Deriving the increment and adding it to whatever the run ACTUALLY started
+ * with fixes that permanently: correct at 30/20, correct at 4/3, correct at
+ * whatever STARTING_LIMITS is set to next.
+ *
+ * TODO(testing): STARTING_LIMITS in ../route.ts is temporarily set to
+ * max_candidates: 4 / max_scrapes: 3 for low-volume testing. Restore it to
+ * 30 / 20 once testing is done — nothing here needs to change when you do.
+ *
+ * Tool calls rise with them for the same reason the starting cap is derived
+ * rather than round: each extra website read costs a scrape call, a
+ * qualification call, and up to four draft calls if it qualifies.
+ */
+const CONTINUE_INCREMENT = { max_candidates: 5, max_scrapes: 3, max_tool_calls: 25, max_agent_turns: 20 };
 
 export async function POST(
   request: Request,
@@ -60,7 +85,7 @@ export async function POST(
   // database rather than by a check we could forget to write.
   const { data: run } = await supabase
     .from("runs")
-    .select("id, status, icp, form, clarification_rounds, target_leads, pending_questions")
+    .select("id, status, icp, form, clarification_rounds, target_leads, pending_questions, continue_count, max_candidates, max_scrapes, max_tool_calls, max_agent_turns")
     .eq("id", id)
     .maybeSingle();
 
@@ -81,7 +106,11 @@ export async function POST(
     .select("id", { count: "exact", head: true })
     .eq("run_id", id);
 
-  const ctx = { hasIcp: Boolean(run.icp), hasLeads: (leadCount ?? 0) > 0 };
+  const ctx = {
+    hasIcp: Boolean(run.icp),
+    hasLeads: (leadCount ?? 0) > 0,
+    continuesUsed: run.continue_count ?? 0,
+  };
 
   // THE check. Same table, same status field, same context, as the UI.
   if (!actionAllowed(status, actionId, ctx)) {
@@ -143,7 +172,10 @@ export async function POST(
       // ICP the UI no longer offers a way to edit.
       if (!run.icp) {
         return NextResponse.json(
-          { error: "This run has no finalised ICP yet, so research can't start." },
+          {
+            error:
+              "This run has no finalised criteria yet, so the search can't start. Start a new search — this one didn't get far enough to run.",
+          },
           { status: 409 },
         );
       }
@@ -155,13 +187,34 @@ export async function POST(
     case "retry":
     case "continue_higher_limit": {
       if (actionId === "continue_higher_limit") {
-        await db.from("runs").update(RAISED_LIMITS).eq("id", id).eq("status", status);
+        // Counted in the same write that raises the limits, conditional on the
+        // count we authorised against — two overlapping clicks cannot both
+        // spend a continue. Added to whatever the run's limits ACTUALLY are
+        // right now, not looked up from a table keyed on how many times this
+        // has been pressed — so it is correct regardless of what the run
+        // started with.
+        const raised = {
+          max_candidates: run.max_candidates + CONTINUE_INCREMENT.max_candidates,
+          max_scrapes: run.max_scrapes + CONTINUE_INCREMENT.max_scrapes,
+          max_tool_calls: run.max_tool_calls + CONTINUE_INCREMENT.max_tool_calls,
+          max_agent_turns: run.max_agent_turns + CONTINUE_INCREMENT.max_agent_turns,
+        };
+
+        const { data: bumped } = await db
+          .from("runs")
+          .update({ ...raised, continue_count: ctx.continuesUsed + 1 })
+          .eq("id", id)
+          .eq("status", status)
+          .eq("continue_count", ctx.continuesUsed)
+          .select("id")
+          .maybeSingle();
+        if (!bumped) return conflict();
         await event(
           db,
           id,
           "note",
           null,
-          `Limits raised to ${RAISED_LIMITS.max_candidates} companies / ${RAISED_LIMITS.max_scrapes} website reads, continuing from where the run stopped.`,
+          `Limits raised to ${raised.max_candidates} companies / ${raised.max_scrapes} website reads (raise ${ctx.continuesUsed + 1} of ${MAX_CONTINUES}), continuing from where the run stopped.`,
         );
       }
       // The agent server's /retry resumes: companies already researched are
@@ -342,7 +395,11 @@ async function handOffToAgent(runId: string, path: "start" | "retry") {
     }
     if (!res.ok) {
       return NextResponse.json(
-        { error: `The agent server refused the request (${res.status}).` },
+        {
+          error:
+            `The agent server refused the request (${res.status}). Nothing was started and nothing was spent — ` +
+            "refresh to see where the run actually is, then try again.",
+        },
         { status: 502 },
       );
     }

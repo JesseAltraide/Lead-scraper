@@ -479,6 +479,10 @@ const ALIASES: Record<string, string> = {
   "software as a service": "software development",
   tech: "technology, information and internet",
   technology: "technology, information and internet",
+  // Found during manual end-to-end testing (week5-progress.md Errors & Fixes
+  // #14): the plain English term people actually type for this industry
+  // wasn't aliased at all, only the SaaS-specific phrasings were.
+  "software engineering": "software development",
   it: "it services and it consulting",
   fintech: "financial services",
   healthtech: "hospitals and health care",

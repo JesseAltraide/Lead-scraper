@@ -39,3 +39,16 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# playwright e2e
+# tests/.auth holds a real Supabase session token for the E2E user — never commit it.
+/tests/.auth/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
+# Local-only E2E harness: seeds real rows via the service-role key and holds a
+# test credential. Kept on disk for local runs, deliberately never pushed.
+/tests/
+/playwright.config.ts

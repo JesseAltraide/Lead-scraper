@@ -2,8 +2,9 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { db, rpc, asGuardError } from "./db.js";
-import { env } from "./env.js";
+import { env, describeProviders } from "./env.js";
 import { buildToolServer } from "./tools.js";
+import { notifySearchFinished } from "./notify.js";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -145,6 +146,16 @@ export async function runAgent(
     .eq("id", runId)
     .single();
 
+  // Recorded on the run itself, not only in the server log: a reviewer looking
+  // at "30 companies" has no way to tell whether those came from a real paid
+  // search or from the built-in fixtures, and that difference changes what the
+  // whole result means.
+  await db.from("run_events").insert({
+    run_id: runId,
+    kind: "note",
+    reason: describeProviders(),
+  });
+
   const heartbeat = setInterval(() => {
     void rpc("run_heartbeat", { p_run_id: runId }).catch(() => {});
   }, 20_000);
@@ -234,6 +245,13 @@ export async function runAgent(
     }
 
     const { data: final } = await db.from("runs").select("status").eq("id", runId).single();
+    // Covers every path that ends the run WITHOUT going through the finish_run
+    // tool (turn limit reached, complete_run/fail_run above) — notify.ts's own
+    // one-shot marker means this cannot double-send if finish_run already did.
+    // Awaited so this is strictly sequenced after finish_run's own await of
+    // the same call (see tools.ts) — that ordering, not the marker check
+    // alone, is what prevents a double-send when both paths fire for one run.
+    if (final?.status) await notifySearchFinished(runId, final.status);
     return { status: final?.status ?? "unknown", turns, costUsd };
   } catch (err) {
     const g = asGuardError(err);
@@ -244,6 +262,7 @@ export async function runAgent(
       p_step: "agent_loop",
       p_reason: g.message,
     }).catch(() => {});
+    await notifySearchFinished(runId, "failed");
     return { status: "failed", turns, costUsd };
   } finally {
     clearInterval(heartbeat);

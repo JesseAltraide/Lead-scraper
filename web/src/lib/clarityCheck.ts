@@ -32,6 +32,24 @@ export type { ClarificationItem, ClarifiableField } from "./clarityRules";
 const MAX_CLARIFICATION_ROUNDS = 3;
 
 /**
+ * A hard ceiling on the one AI call, because this whole function is awaited
+ * INSIDE the HTTP request that creates a run or answers a question. Without
+ * it, a hung call leaves the run at `refining` — a status whose only action is
+ * Cancel — with the screen still claiming to be working.
+ *
+ * `signal` rather than the SDK's own `timeout` option deliberately: the SDK
+ * retries its timeouts ("in a worst-case scenario you may wait much longer
+ * than this timeout"), so only an abort signal is a real ceiling. Matches the
+ * AbortSignal.timeout already used for the agent handoff in the action route.
+ *
+ * This covers a SLOW call. It cannot cover the request being killed outright
+ * (serverless limit, deploy, crash) — nothing in-process can. That case is
+ * caught by sweep_stalled_runs, which now also reclaims stalled `refining`
+ * runs (migration 0008).
+ */
+const CLARITY_CALL_TIMEOUT_MS = 30_000;
+
+/**
  * Runs the check and moves the run to `awaiting_clarification` or `icp_ready`
  * — or, once 3 rounds have already run and the form is STILL not clear
  * enough, ends the run rather than asking a 4th time.
@@ -69,12 +87,15 @@ export async function runClarityCheck(runId: string, form: IntakeForm): Promise<
 
   try {
     const client = new Anthropic({ apiKey: key });
-    const response = await client.messages.create({
-      model: "claude-sonnet-5",
-      max_tokens: 1500,
-      system: SYSTEM,
-      messages: [{ role: "user", content: JSON.stringify(form, null, 2) }],
-    });
+    const response = await client.messages.create(
+      {
+        model: "claude-sonnet-5",
+        max_tokens: 1500,
+        system: SYSTEM,
+        messages: [{ role: "user", content: JSON.stringify(form, null, 2) }],
+      },
+      { signal: AbortSignal.timeout(CLARITY_CALL_TIMEOUT_MS) },
+    );
 
     const text = response.content
       .filter((b): b is Anthropic.TextBlock => b.type === "text")

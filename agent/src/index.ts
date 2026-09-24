@@ -3,6 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { env, describeProviders } from "./env.js";
 import { db, rpc } from "./db.js";
 import { runAgent } from "./runAgent.js";
+import { notifySearchFinished } from "./notify.js";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -101,9 +102,14 @@ app.post("/runs/:runId/retry", async (req, res) => {
 /** Reclaims runs that have gone silent. Not a substitute for a real failure signal. */
 setInterval(
   () => {
-    void rpc("sweep_stalled_runs", { p_stale_minutes: 10 }).catch((err) =>
-      console.error("[sweep] failed:", err),
-    );
+    void rpc<{ id: string; status: string }[]>("sweep_stalled_runs", { p_stale_minutes: 10 })
+      .then((reclaimed) => {
+        // A process that died mid-run never reaches its own runAgent() catch
+        // block — this is the only place that failure is ever observed, so
+        // it is the only place that can notify for it.
+        for (const r of reclaimed ?? []) void notifySearchFinished(r.id, r.status);
+      })
+      .catch((err) => console.error("[sweep] failed:", err));
   },
   60_000,
 );

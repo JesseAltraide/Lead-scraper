@@ -14,8 +14,12 @@ import { useLiveRun } from "./useLiveRun";
  * something the backend would refuse.
  */
 
+// cursor-pointer is explicit because a native <button> defaults to the arrow
+// cursor, not the hand — unlike <a>, browsers do not treat it as a pointer
+// target on its own, which is exactly why a button can work correctly and
+// still feel inert to click.
 const BUTTON_BASE =
-  "inline-flex items-center justify-center gap-2 rounded-[8px] px-3.5 py-2 text-sm font-medium " +
+  "inline-flex items-center justify-center gap-2 rounded-[8px] px-3.5 py-2 text-sm font-medium cursor-pointer " +
   "transition-opacity disabled:cursor-not-allowed disabled:opacity-50";
 
 function classesFor(tone: RunAction["tone"]) {
@@ -64,6 +68,13 @@ export function RunActions({
     if (action.endpoint === null) {
       if (action.href) {
         router.push(action.href);
+        return;
+      }
+      // "See the leads" navigates to the dedicated leads page (three tabs)
+      // rather than scrolling — the full per-lead detail no longer lives on
+      // this page at all, so there is nothing left here to scroll to.
+      if (action.id === "review") {
+        router.push(`/runs/${runId}/leads`);
         return;
       }
       document.getElementById("review")?.scrollIntoView({ behavior: "smooth" });
@@ -123,12 +134,14 @@ export function RunActions({
                 >
                   Yes, {action.label.toLowerCase()}
                 </button>
+                {/* This button ABANDONS the action. "Keep going" read as if it
+                    continued with it — the opposite of what it does. */}
                 <button
                   type="button"
                   className={classesFor("quiet")}
                   onClick={() => setConfirming(null)}
                 >
-                  Keep going
+                  Cancel
                 </button>
               </span>
             );

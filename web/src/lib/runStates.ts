@@ -74,7 +74,17 @@ export type RunStateSpec = {
 export type RunContext = {
   hasIcp: boolean;
   hasLeads: boolean;
+  /**
+   * How many times "Keep searching" has already raised this run's limits.
+   * Part of the context for the same reason hasIcp is: the decision depends on
+   * it, so leaving it out would just relocate the disagreement to whichever
+   * side remembered to check it (see Errors & Fixes #4).
+   */
+  continuesUsed: number;
 };
+
+/** "Keep searching" may raise the limits at most this many times. */
+export const MAX_CONTINUES = 3;
 
 const CANCEL: RunAction = {
   id: "cancel",
@@ -250,6 +260,10 @@ export function actionsFor(status: RunStatus, ctx: RunContext): RunAction[] {
   let actions = RUN_STATES[status].actions.filter((a) => {
     if (!ctx.hasIcp && needsIcp.includes(a.id)) return false;
     if (a.id === "review" && !ctx.hasLeads) return false;
+    // Raising the limits is capped. Filtered out here rather than disabled in
+    // the screen, so the button and the backend agree without either needing
+    // to know about the other.
+    if (a.id === "continue_higher_limit" && ctx.continuesUsed >= MAX_CONTINUES) return false;
     return true;
   });
 

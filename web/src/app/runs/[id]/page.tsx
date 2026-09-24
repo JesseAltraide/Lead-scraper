@@ -1,10 +1,13 @@
 import { notFound, redirect } from "next/navigation";
+import Link from "next/link";
 import { serverClient, requireUser } from "@/lib/supabase-server";
 import { RUN_STATES, isRunStatus, type RunStatus } from "@/lib/runStates";
 import { Badge, Card, CardHeader, EmptyState } from "@/components/ui";
 import { RunActions } from "@/components/RunActions";
 import { IcpSummary } from "@/components/IcpSummary";
 import { ClarifyForm } from "@/components/ClarifyForm";
+import { IcpFields } from "@/components/IcpFields";
+import { LEAD_TABS, TAB_LABEL, LEAD_TONE } from "@/lib/leadDisplay";
 import type { Icp } from "@/lib/icp";
 import type { ClarificationItem } from "@/lib/clarityCheck";
 
@@ -19,18 +22,6 @@ const STAGE_LABEL: Record<string, { text: string; tone: string }> = {
   scraped: { text: "Website read", tone: "working" },
   scrape_failed: { text: "Website couldn't be read", tone: "partial" },
   qualified_done: { text: "Qualified", tone: "done" },
-};
-
-const LEAD_LABEL: Record<string, string> = {
-  qualified: "Good fit",
-  needs_review: "Couldn't fully check",
-  not_qualified: "Not a fit",
-};
-
-const LEAD_TONE: Record<string, string> = {
-  qualified: "done",
-  needs_review: "waiting",
-  not_qualified: "neutral",
 };
 
 export default async function RunPage({ params }: { params: Promise<{ id: string }> }) {
@@ -76,14 +67,14 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
   const [{ data: candidates }, { data: leads }, { data: events }] = await Promise.all([
     supabase
       .from("candidates")
-      .select("id, company_name, domain, employee_count, location, industry, stage, stage_reason")
+      .select(
+        "id, company_name, domain, employee_count, location, industry, description, stage, stage_reason",
+      )
       .eq("run_id", id)
       .order("created_at", { ascending: true }),
-    supabase
-      .from("leads")
-      .select("id, company_name, domain, status, confidence, confidence_basis")
-      .eq("run_id", id)
-      .order("created_at", { ascending: true }),
+    // Only what's needed for the per-status counts below — the full lead
+    // detail (evidence, drafts) now lives entirely on the dedicated leads page.
+    supabase.from("leads").select("id, status").eq("run_id", id),
     supabase
       .from("run_events")
       .select("kind, reason, status_to, created_at")
@@ -92,15 +83,32 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
       .limit(5),
   ]);
 
+  // Written once at run start by the agent (runAgent.ts). Queried on its own
+  // rather than read from the 5-row activity list, which the note falls out of
+  // as soon as a run does anything.
+  const { data: providerNote } = await supabase
+    .from("run_events")
+    .select("reason")
+    .eq("run_id", id)
+    .eq("kind", "note")
+    .like("reason", "%Apify%")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const usedFixtures = Boolean(providerNote?.reason?.includes("Apify: fixtures"));
+
   const allCandidates = candidates ?? [];
   const allLeads = leads ?? [];
   const qualified = allLeads.filter((l) => l.status === "qualified");
-  const needsReview = allLeads.filter((l) => l.status === "needs_review");
 
   // What this run actually CONTAINS, which decides what is possible alongside
   // its status. A run cancelled during the clarifying questions has no ICP, so
   // every action needing one is impossible whatever the status says.
-  const ctx = { hasIcp: Boolean(run.icp), hasLeads: allLeads.length > 0 };
+  const ctx = {
+    hasIcp: Boolean(run.icp),
+    hasLeads: allLeads.length > 0,
+    continuesUsed: run.continue_count ?? 0,
+  };
 
   // Changes whenever anything the screen displays changes, so the poll can tell
   // a refresh that landed from one that silently did nothing.
@@ -180,18 +188,76 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
         </Card>
       )}
 
+      {/* --- ICP (Phase 7: shown at every status once it exists, not only at
+          icp_ready's confirm screen — "the run's ICP" is part of what a
+          reviewer needs to see to judge the agent's decisions) ------------- */}
+
+      {status !== "icp_ready" && ctx.hasIcp ? (
+        <Card>
+          <CardHeader title="What was searched for" meta="View only" />
+          <div className="px-5 py-5">
+            <IcpFields icp={run.icp as Icp} />
+          </div>
+        </Card>
+      ) : null}
+
       {/* --- Budget ------------------------------------------------------- */}
 
       {status !== "refining" && status !== "awaiting_clarification" ? (
         <Card>
-          <CardHeader title="Limits" meta="Enforced by the tools, read from this run" />
+          <CardHeader
+            title="What this run is allowed to spend"
+            meta="Caps, not targets — the run stops at whichever it reaches first"
+          />
           <dl className="grid grid-cols-2 gap-px bg-[var(--border)] sm:grid-cols-4">
-            <Meter label="Companies found" used={run.candidates_pulled} cap={run.max_candidates} />
-            <Meter label="Websites read" used={run.scrapes_used} cap={run.max_scrapes} />
-            <Meter label="Tool calls" used={run.tool_calls_used} cap={run.max_tool_calls} />
-            <Meter label="Qualified leads" used={qualified.length} cap={run.target_leads} />
+            {/* "Companies pulled", NOT "found": this counts search results paid
+                for, and duplicates are discarded afterwards. Labelling it
+                "found" made 30/30 read as thirty companies when only six
+                distinct ones existed. */}
+            <Meter
+              label="Company searches used"
+              hint={`${allCandidates.length} kept after duplicates`}
+              used={run.candidates_pulled}
+              cap={run.max_candidates}
+            />
+            <Meter
+              label="Websites read"
+              hint="Only companies that pass the first screen"
+              used={run.scrapes_used}
+              cap={run.max_scrapes}
+            />
+            <Meter
+              label="Agent steps used"
+              hint="Every action the agent takes"
+              used={run.tool_calls_used}
+              cap={run.max_tool_calls}
+            />
+            <Meter
+              label="Qualified leads"
+              hint="Your target, not a cap"
+              used={qualified.length}
+              cap={run.target_leads}
+            />
           </dl>
         </Card>
+      ) : null}
+
+      {/* Companies that came from the built-in fixtures are not real search
+          results, and nothing else on this screen distinguishes them — which
+          is exactly how a run can look like it found 30 companies while the
+          Apify console shows no activity at all. */}
+      {usedFixtures ? (
+        <div
+          className="rounded-[var(--radius)] px-4 py-3 text-sm"
+          style={{ background: "var(--partial-bg)", color: "var(--partial)" }}
+        >
+          <p className="font-medium">These are sample companies, not a real search</p>
+          <p className="mt-1">
+            This run used the built-in fixture data, so nothing was searched or billed. Set
+            <code className="mx-1 font-mono text-xs">APIFY_LIVE=true</code>
+            in the agent&apos;s environment and start a new search to use the real company source.
+          </p>
+        </div>
       ) : null}
 
       {/* --- Companies ---------------------------------------------------- */}
@@ -210,10 +276,23 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">{c.company_name}</p>
                     <p className="truncate text-xs text-[var(--text-muted)]">
-                      {[c.domain, c.employee_count ? `${c.employee_count} staff` : null, c.location]
+                      {[
+                        c.domain,
+                        c.employee_count ? `${c.employee_count} staff` : null,
+                        c.location,
+                        c.industry,
+                      ]
                         .filter(Boolean)
                         .join(" · ") || "no details returned"}
                     </p>
+                    {/* Phase 7: "full company details from the search" — the
+                        description is the one field long enough to need its
+                        own line rather than joining the summary above. */}
+                    {c.description ? (
+                      <p className="mt-0.5 line-clamp-2 text-xs text-[var(--text-faint)]">
+                        {c.description}
+                      </p>
+                    ) : null}
                   </div>
                   <div className="text-right">
                     <Badge tone={stage.tone}>{stage.text}</Badge>
@@ -240,39 +319,29 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
       ) : null}
 
       {/* --- Leads -------------------------------------------------------- */}
+      {/* A summary and a link, not the full detail: this section used to
+          render every lead's Evidence panel and Outreach-drafts panel inline,
+          which made the page unusable once several leads existed. The full
+          review — three tabs, Qualified / Not sure / Not qualified — lives on
+          its own page now. */}
 
       {allLeads.length > 0 ? (
         <Card>
-          <CardHeader
-            title="Leads"
-            meta={`${qualified.length} qualified · ${needsReview.length} need review`}
-          />
-          <ul className="divide-y divide-[var(--border)]" id="review">
-            {allLeads.map((l) => (
-              <li key={l.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3">
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">{l.company_name}</p>
-                  <p className="truncate text-xs text-[var(--text-muted)]">
-                    {l.confidence_basis}
-                  </p>
-                </div>
-                <span className="text-sm tabular-nums text-[var(--text-muted)]">
-                  {l.confidence}
-                </span>
-                <Badge tone={LEAD_TONE[l.status] ?? "neutral"}>
-                  {LEAD_LABEL[l.status] ?? l.status}
-                </Badge>
-              </li>
+          <CardHeader title="Leads" />
+          <div className="flex flex-wrap items-center gap-3 px-5 py-4" id="review">
+            {LEAD_TABS.map((tab) => (
+              <Badge key={tab} tone={LEAD_TONE[tab]}>
+                {allLeads.filter((l) => l.status === tab).length} {TAB_LABEL[tab].toLowerCase()}
+              </Badge>
             ))}
-          </ul>
-          {needsReview.length > 0 ? (
-            <p className="border-t border-[var(--border)] px-5 py-3 text-xs text-[var(--text-muted)]">
-              Leads needing review are shown with their evidence but can&apos;t be promoted to qualified
-              here — a qualified lead needs every hard filter confirmed, and promoting one by hand
-              would create a “qualified” lead with nothing behind it. They don&apos;t count toward the
-              target.
-            </p>
-          ) : null}
+            <Link
+              href={`/runs/${id}/leads`}
+              className="ml-auto rounded-full px-3.5 py-1.5 text-sm font-medium transition-opacity hover:opacity-90"
+              style={{ background: "var(--accent)", color: "var(--accent-text)" }}
+            >
+              See the leads
+            </Link>
+          </div>
         </Card>
       ) : null}
 
@@ -280,8 +349,13 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
 
       {events && events.length > 0 ? (
         <Card>
-          <CardHeader title="Recent activity" />
-          <ul className="divide-y divide-[var(--border)]">
+          {/* Collapsed by default: useful when something looks wrong, noise the
+              rest of the time. */}
+          <details>
+            <summary className="cursor-pointer px-5 py-3.5 text-sm font-semibold tracking-tight">
+              Recent activity
+            </summary>
+          <ul className="divide-y divide-[var(--border)] border-t border-[var(--border)]">
             {events.map((e, i) => (
               <li key={i} className="flex gap-4 px-5 py-2.5 text-xs">
                 <span className="shrink-0 tabular-nums text-[var(--text-faint)]">
@@ -293,18 +367,30 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
               </li>
             ))}
           </ul>
+          </details>
         </Card>
       ) : null}
     </main>
   );
 }
 
-function Meter({ label, used, cap }: { label: string; used: number; cap: number }) {
+function Meter({
+  label,
+  hint,
+  used,
+  cap,
+}: {
+  label: string;
+  hint?: string;
+  used: number;
+  cap: number;
+}) {
   const pct = cap > 0 ? Math.min(100, Math.round((used / cap) * 100)) : 0;
   const atCap = used >= cap;
   return (
     <div className="bg-[var(--surface)] px-5 py-3.5">
       <dt className="text-xs text-[var(--text-muted)]">{label}</dt>
+      {hint ? <p className="mt-0.5 text-[11px] text-[var(--text-faint)]">{hint}</p> : null}
       <dd className="mt-1 text-sm font-medium tabular-nums">
         {used} <span className="text-[var(--text-faint)]">/ {cap}</span>
       </dd>

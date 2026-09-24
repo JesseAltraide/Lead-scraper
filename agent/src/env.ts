@@ -42,6 +42,14 @@ export const env = {
   firecrawlLive: process.env.FIRECRAWL_LIVE === "true",
 
   workerId: `agent-${process.pid}`,
+
+  // Milestone emails (drafts ready, search finished). Gmail SMTP requires an
+  // App Password, not the account password — 2FA blocks plain-password SMTP
+  // by default. Generate one at myaccount.google.com/apppasswords. Null
+  // (not configured) means notify.ts silently skips sending rather than
+  // failing the run — a notification failing must never block real work.
+  smtpUser: optional("SMTP_USER"),
+  smtpPass: optional("SMTP_PASS"),
 };
 
 export const liveDiscovery = env.apifyLive && Boolean(env.apifyToken && env.apifyActorId);

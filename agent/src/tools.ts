@@ -6,6 +6,7 @@ import { searchCompaniesCached } from "./providers/companySearch.js";
 import { scrapeCached, wrapUntrusted } from "./providers/scraper.js";
 import { toStringArray, cleanString, normalizeDomain } from "./normalize.js";
 import { computeConfidence, checkCitation } from "./scoring.js";
+import { notifyDraftsReady, notifySearchFinished } from "./notify.js";
 
 // Re-exported so the HTTP layer and the tests import them from one place.
 export { computeConfidence, checkCitation };
@@ -480,6 +481,13 @@ const checkListQualityImpl = wrapTool(
     const domains = qualified.map((l) => l.domain_normalized);
     const duplicateDomains = domains.filter((d, i) => domains.indexOf(d) !== i);
 
+    // check_list_quality only ever runs after every qualified lead already has
+    // its four draft pieces (Phase 6 comes after Phase 5) — the real, honest
+    // "drafts ready" signal, not an invented one. Fire-and-forget: notify.ts
+    // fails soft on its own, and this must never delay or fail the tool call
+    // the agent is actually waiting on.
+    if (qualified.length > 0) void notifyDraftsReady(ctx.runId);
+
     return {
       target_leads: run.target_leads,
       qualified_count: qualified.length,
@@ -525,6 +533,14 @@ const finishRunImpl = wrapTool(
       p_run_id: ctx.runId,
       p_stopping_reason: reason,
     });
+    // Awaited, not fire-and-forget: runAgent.ts's post-loop tail re-reads the
+    // run's status and calls notifySearchFinished again as a catch-all for
+    // paths that skip this tool. Its one-shot marker is a plain SELECT-then-
+    // INSERT with no DB-level uniqueness — if this call were still in flight
+    // when that tail check ran, both would see no marker yet and both would
+    // send. Awaiting here guarantees the marker is written (or the send
+    // skipped) before finish_run returns and the agent loop can close out.
+    await notifySearchFinished(ctx.runId, run.status);
     return { final_status: run.status, stopping_reason: reason };
   },
 );

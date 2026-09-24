@@ -12,12 +12,23 @@ import { runClarityCheck } from "@/lib/clarityCheck";
  * second overlapping request fails the insert and gets a clear answer.
  */
 
-/** Starting limits. Deliberately tiny: test small, check real cost, then scale. */
+/**
+ * Starting limits. Previously deliberately tiny (4 companies / 3 reads) to
+ * check real cost before scaling; raised now that the actor and the cost per
+ * run are both confirmed.
+ *
+ * max_tool_calls is NOT a round number — it is derived from what a full run at
+ * these limits actually needs, because a cap below that halts the agent
+ * mid-run and reports a partial result for no reason but arithmetic:
+ *   ~3 discover + ~3 screen + 20 scrapes + 20 qualifications
+ *   + 4 draft pieces x up to 10 qualified leads (40) + quality + finish ~= 90.
+ * 120 leaves headroom for refusals and retries without being unbounded.
+ */
 const STARTING_LIMITS = {
   max_candidates: 4,
   max_scrapes: 3,
-  max_agent_turns: 30,
-  max_tool_calls: 40,
+  max_agent_turns: 150,
+  max_tool_calls: 120,
 };
 
 export async function POST(request: Request) {
