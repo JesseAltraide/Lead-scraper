@@ -91,15 +91,28 @@ const discoverImpl = wrapTool(
       p_requested: Math.min(asked, run.max_candidates),
     });
 
-    const { companies, cached } = await searchCompaniesCached({
-      industry: icp.industry,
-      industryId: icp.industryId,
-      geography: icp.geography,
-      minEmployees: icp.minEmployees,
-      maxEmployees: icp.maxEmployees,
-      companySizeBand: icp.companySizeBand,
-      maxItems: granted,
-    });
+    let companies, cached;
+    try {
+      ({ companies, cached } = await searchCompaniesCached({
+        industry: icp.industry,
+        industryId: icp.industryId,
+        geography: icp.geography,
+        minEmployees: icp.minEmployees,
+        maxEmployees: icp.maxEmployees,
+        companySizeBand: icp.companySizeBand,
+        maxItems: granted,
+      }));
+    } catch (err) {
+      // The search never produced a result — refund the budget it claimed
+      // rather than let a provider outage permanently eat into the run's
+      // candidate cap for zero candidates.
+      await rpc("release_candidate_claim", {
+        p_run_id: ctx.runId,
+        p_granted: granted,
+        p_reason: "A company search attempt failed before returning results; the budget it claimed was refunded.",
+      }).catch(() => {});
+      throw err;
+    }
 
     const inserted: unknown[] = [];
     let excludedNoWebsite = 0;
@@ -157,8 +170,16 @@ const discoverImpl = wrapTool(
       excluded_no_website: excludedNoWebsite,
       duplicates_rejected: duplicates,
       candidates: inserted,
+      // A static "screen each candidate" instruction made no sense on a
+      // genuinely empty result and gave no signal to stop — the agent had no
+      // reason not to keep trying (re-discovering, adjusting terms) for many
+      // more turns before finally giving up near the turn limit, each turn
+      // costing real wall-clock latency. Naming the empty result explicitly
+      // and pointing straight at finish_run shortens that to one turn.
       next_step:
-        "Screen each candidate against the hard filters using this search data only, via screen_candidates. Do not scrape yet.",
+        inserted.length > 0
+          ? "Screen each candidate against the hard filters using this search data only, via screen_candidates. Do not scrape yet."
+          : "Zero candidates came back from this search. Retrying the same criteria will not produce a different result. If you have already tried reasonable variations, call check_list_quality then finish_run now, stating plainly that the search returned no matching companies, rather than continuing to retry.",
     };
   },
 );
@@ -382,7 +403,9 @@ const saveQualificationImpl = wrapTool(
       note:
         lead.status === "qualified"
           ? "Qualified. Write all four outreach pieces for this lead."
-          : "Not qualified for outreach. Drafts are only written for qualified leads, and needs_review leads do not count toward the target.",
+          : lead.status === "needs_review"
+            ? "Needs review, not qualified: it does not count toward the target. Drafting outreach for it is optional, use your judgment on whether the evidence is strong enough to be worth writing for."
+            : "Not qualified. No outreach is drafted for a lead that failed a hard filter.",
     };
   },
 );

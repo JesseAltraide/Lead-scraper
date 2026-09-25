@@ -5,8 +5,6 @@ description: Judge whether a discovered company fits the qualification objective
 
 # Lead Qualification
 
-Source: `assets/lead-qualification-guide.md`.
-
 ## Inputs to use
 
 - The refined ICP on the run record
@@ -65,5 +63,7 @@ verdicts. Do not supply a confidence number; you will not be asked for one.
 - Explain the decision in plain language, in `fit_reasons` and `concerns`.
 - Prefer fewer strong leads over a larger weak list.
 
-`needs_review` leads do not count toward the target, and no outreach is drafted
-for them. That is correct behaviour, not a failure.
+`needs_review` leads never count toward the target. Drafting outreach for one
+is allowed but optional, use your judgment on whether it is worth writing
+given the gap in evidence; it is never required, and a needs_review lead
+still does not count toward the target even with drafts written.

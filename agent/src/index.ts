@@ -99,10 +99,18 @@ app.post("/runs/:runId/retry", async (req, res) => {
   void runAgent(runId).catch((err) => console.error(`[run ${runId}] retry crashed:`, err));
 });
 
-/** Reclaims runs that have gone silent. Not a substitute for a real failure signal. */
+/**
+ * Reclaims runs that have gone silent. Not a substitute for a real failure
+ * signal — and specifically NOT a reliable one on its own: this sweep lives
+ * inside the same agent process whose death is exactly the failure mode it
+ * exists to catch. If the whole process is down, this interval is down with
+ * it. The web app runs the same RPC from its own separate process (see
+ * runs/[id]/page.tsx) as the backstop for that case, since it is the only
+ * thing guaranteed to still be alive when the agent server is not.
+ */
 setInterval(
   () => {
-    void rpc<{ id: string; status: string }[]>("sweep_stalled_runs", { p_stale_minutes: 10 })
+    void rpc<{ id: string; status: string }[]>("sweep_stalled_runs", { p_stale_minutes: 5 })
       .then((reclaimed) => {
         // A process that died mid-run never reaches its own runAgent() catch
         // block — this is the only place that failure is ever observed, so

@@ -1,8 +1,10 @@
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
-import { serverClient, requireUser } from "@/lib/supabase-server";
+import { serverClient, getAuthState } from "@/lib/supabase-server";
 import { Badge, Card, EmptyState } from "@/components/ui";
 import { LeadRow } from "@/components/LeadRow";
+import { RefreshOnMount } from "@/components/RefreshOnMount";
+import { ExportButton } from "@/components/ExportButton";
 import {
   LEAD_TABS,
   TAB_LABEL,
@@ -34,7 +36,19 @@ export default async function LeadsPage({
   const { id } = await params;
   const { tab: tabParam } = await searchParams;
 
-  const user = await requireUser();
+  const { user, offline } = await getAuthState();
+  // Same reasoning as the homepage: a dropped connection must not look like
+  // a logged-out visitor and send someone with a valid session to sign-in.
+  if (!user && offline) {
+    return (
+      <main className="mx-auto w-full max-w-4xl px-5 py-10">
+        <EmptyState
+          title="Can't reach the server"
+          detail="This looks like a connection problem, not a sign-in issue. Check your internet connection and reload."
+        />
+      </main>
+    );
+  }
   if (!user) redirect("/sign-in");
 
   const supabase = await serverClient();
@@ -42,7 +56,7 @@ export default async function LeadsPage({
   // RLS means this can only ever return a run belonging to the signed-in user.
   const { data: run } = await supabase
     .from("runs")
-    .select("id, status, target_leads")
+    .select("id, target_leads")
     .eq("id", id)
     .maybeSingle();
   if (!run) notFound();
@@ -77,14 +91,15 @@ export default async function LeadsPage({
     filtersByLead.set(f.lead_id, [...(filtersByLead.get(f.lead_id) ?? []), f as FilterResult]);
   }
 
-  // Drafts only ever exist for qualified leads (save_lead_qualification /
-  // save_outreach_draft both enforce this) — only fetch for those ids.
-  const qualifiedIds = allLeads.filter((l) => l.status === "qualified").map((l) => l.id);
-  const { data: draftPieces } = qualifiedIds.length
+  // Every lead with a draft shows it, regardless of status — fetch for all.
+  const draftableIds = allLeads.map((l) => l.id);
+  const { data: draftPieces } = draftableIds.length
     ? await supabase
         .from("draft_pieces")
-        .select("id, lead_id, piece_key, rewrites_requested, rewrite_in_flight, rewrite_claimed_at")
-        .in("lead_id", qualifiedIds)
+        .select(
+          "id, lead_id, piece_key, rewrites_requested, rewrite_in_flight, rewrite_claimed_at, edits_requested",
+        )
+        .in("lead_id", draftableIds)
     : { data: [] as DraftPiece[] };
   const piecesByLead = new Map<string, DraftPiece[]>();
   for (const p of draftPieces ?? []) {
@@ -105,8 +120,24 @@ export default async function LeadsPage({
     versionsByPiece.set(v.piece_id, [...(versionsByPiece.get(v.piece_id) ?? []), v as DraftVersion]);
   }
 
+  // A draft_pieces row can exist while still claimed/in-flight with no
+  // chosen version yet — only a chosen version is actually something the
+  // export route will write out, so that (not just piece existence, and not
+  // just the run's own status) is what decides whether there is anything to
+  // export. Migration 0015 lets a run land on completed/completed_partial
+  // with budget exhausted before any draft was ever written (e.g. stopped
+  // mid-run with zero qualified leads), so status alone isn't enough here.
+  //
+  // Beyond that: exporting is for handing reviewed copy to someone, so it
+  // also stays hidden until at least one chosen version has actually been
+  // looked at (reviewed=true, set by the "mark reviewed" action on the
+  // review screen) — a run full of unread AI drafts isn't ready to leave
+  // this app yet, even if drafts technically exist.
+  const hasExportableDraft = (draftVersions ?? []).some((v) => v.is_chosen && v.reviewed);
+
   return (
     <main className="mx-auto max-w-4xl space-y-5 px-5 py-10">
+      <RefreshOnMount />
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <Link
@@ -117,16 +148,7 @@ export default async function LeadsPage({
           </Link>
           <h1 className="mt-1 text-xl font-semibold tracking-tight">Leads</h1>
         </div>
-        {allLeads.length > 0 ? (
-          // A real file download, not a client-side navigation — a plain <a>
-          // to the export route, not next/link.
-          <a
-            href={`/api/runs/${id}/export`}
-            className="cursor-pointer rounded-full border border-[var(--border-strong)] px-3.5 py-1.5 text-sm font-medium transition-colors hover:bg-[var(--surface-2)]"
-          >
-            Export as Word (.docx)
-          </a>
-        ) : null}
+        {hasExportableDraft ? <ExportButton runId={id} /> : null}
       </header>
 
       <Card>

@@ -5,11 +5,12 @@ description: Write review-ready cold outreach — a 3-step email sequence plus a
 
 # Outbound Copywriting
 
-Source: `assets/outbound-copywriting-guide.md`.
-
 ## What to produce
 
-For each **qualified** lead, four pieces, saved one at a time:
+For each **qualified** lead, four pieces, saved one at a time. For a
+**needs_review** lead, the same four pieces are allowed but optional, at your
+judgment, `save_outreach_draft` no longer refuses it. Never for
+`not_qualified`, that refusal stays absolute:
 
 | `piece_key` | Contents |
 |---|---|

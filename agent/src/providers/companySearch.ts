@@ -97,7 +97,12 @@ export class ApifyProvider implements CompanySearchProvider {
     });
 
     if (!res.ok) {
-      throw new Error(`APIFY_ERROR: actor run failed with ${res.status} ${await res.text()}`);
+      // Plain statement first (this is what shows up front on the run page,
+      // see web/src/lib/textSummary.ts), the raw status/body stays attached
+      // for the technical detail.
+      throw new Error(
+        `APIFY_ERROR: Apify is down or unreachable right now. Actor run failed with ${res.status}: ${await res.text()}`,
+      );
     }
 
     const items: unknown = await res.json();

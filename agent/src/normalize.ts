@@ -15,6 +15,12 @@ export function cleanString(input: unknown): string {
   // Model scaffolding that has leaked into a value rather than wrapping it.
   s = s.replace(/<\/?(?:antml:)?(?:invoke|parameter|function_calls|thinking)[^>]*>/gi, "");
   s = s.replace(/^```(?:json|markdown|text)?\s*/i, "").replace(/```\s*$/, "");
+
+  // No em dashes anywhere the model writes text. " — " (a parenthetical
+  // aside, spaced both sides) reads naturally as a comma; a bare "—" joining
+  // two words with no surrounding space reads naturally as a hyphen.
+  s = s.replace(/\s+—\s+/g, ", ").replace(/—/g, " - ");
+
   return s.trim();
 }
 

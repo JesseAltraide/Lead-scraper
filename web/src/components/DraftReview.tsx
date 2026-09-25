@@ -12,6 +12,7 @@ import {
 } from "@/lib/drafts";
 import {
   MAX_REWRITES,
+  MAX_EDITS,
   CANCELLABLE_AFTER_MS,
   draftActionAvailability,
   rewritePhase,
@@ -82,7 +83,6 @@ function PieceReview({
   const [mode, setMode] = useState<"view" | "edit" | "rewrite">("view");
   const [subject, setSubject] = useState(chosen.subject ?? "");
   const [body, setBody] = useState(chosen.body);
-  const [note, setNote] = useState(chosen.personalization_note);
   const [rewriteNote, setRewriteNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -135,9 +135,11 @@ function PieceReview({
     rewritesRequested: piece.rewrites_requested,
     rewriteInFlight: piece.rewrite_in_flight,
     rewriteClaimedAt: piece.rewrite_claimed_at,
+    editsRequested: piece.edits_requested,
   };
   const canRewrite = draftActionAvailability("rewrite", pieceState, now);
   const canCancelRewrite = draftActionAvailability("cancel_rewrite", pieceState, now);
+  const canEdit = draftActionAvailability("edit", pieceState, now);
   const phase = rewritePhase(pieceState, now);
   const originLabel =
     chosen.origin === "initial"
@@ -172,7 +174,7 @@ function PieceReview({
         <p className="text-sm font-medium">{PIECE_LABELS[piece.piece_key]}</p>
         <div className="flex items-center gap-2">
           <span className="text-xs text-[var(--text-muted)]">
-            Version {index} of {total} — {originLabel}
+            Version {index} of {total}, {originLabel}
           </span>
           <Badge tone={chosen.reviewed ? "done" : "waiting"}>
             {chosen.reviewed ? "Reviewed" : "Not reviewed"}
@@ -191,7 +193,7 @@ function PieceReview({
             .sort((a, b) => a.created_at.localeCompare(b.created_at))
             .map((v, i) => (
               <option key={v.id} value={v.id}>
-                Version {i + 1} — {v.origin}
+                Version {i + 1}, {v.origin}
                 {v.id === chosen.id ? " (current)" : ""}
               </option>
             ))}
@@ -204,34 +206,45 @@ function PieceReview({
           <p className="whitespace-pre-wrap text-sm">{chosen.body}</p>
           <p className="text-xs text-[var(--text-muted)]">
             Personalization: {chosen.personalization_note}
-            {chosen.citation_source_url ? ` — ${chosen.citation_source_url}` : ""}
+            {chosen.citation_source_url ? ` (${chosen.citation_source_url})` : ""}
           </p>
 
           <div className="flex flex-wrap gap-2 pt-1">
             {/* Native <button> defaults to the arrow cursor, not the hand —
                 unlike <a>, browsers do not treat it as a pointer target on its
                 own. Every button here needs cursor-pointer AND a hover state
-                explicitly, or it reads as inert even though it works. */}
-            <button
-              type="button"
-              className="cursor-pointer rounded-full border border-[var(--border-strong)] px-3 py-1 text-xs font-medium transition-colors hover:bg-[var(--surface-2)]"
-              onClick={() => {
-                setSubject(chosen.subject ?? "");
-                setBody(chosen.body);
-                setNote(chosen.personalization_note);
-                setMode("edit");
-              }}
-            >
-              Edit
-            </button>
-            <button
-              type="button"
-              className="cursor-pointer rounded-full border border-[var(--border-strong)] px-3 py-1 text-xs font-medium transition-colors hover:bg-[var(--surface-2)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
-              disabled={!canRewrite.available}
-              onClick={() => setMode("rewrite")}
-            >
-              Rewrite with a note ({piece.rewrites_requested}/{MAX_REWRITES} used)
-            </button>
+                explicitly, or it reads as inert even though it works.
+
+                Once the chosen version is reviewed, Edit and Rewrite disappear
+                entirely rather than just disabling — a reviewed draft is
+                treated as done, and the review route deliberately has no way
+                to un-review a version, so there is no path back to editing
+                this one short of choosing a different (unreviewed) version
+                from the dropdown above. */}
+            {!chosen.reviewed ? (
+              <button
+                type="button"
+                className="cursor-pointer rounded-full border border-[var(--border-strong)] px-3 py-1 text-xs font-medium transition-colors hover:bg-[var(--surface-2)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+                disabled={!canEdit.available}
+                onClick={() => {
+                  setSubject(chosen.subject ?? "");
+                  setBody(chosen.body);
+                  setMode("edit");
+                }}
+              >
+                Edit ({piece.edits_requested}/{MAX_EDITS} used)
+              </button>
+            ) : null}
+            {!chosen.reviewed ? (
+              <button
+                type="button"
+                className="cursor-pointer rounded-full border border-[var(--border-strong)] px-3 py-1 text-xs font-medium transition-colors hover:bg-[var(--surface-2)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+                disabled={!canRewrite.available}
+                onClick={() => setMode("rewrite")}
+              >
+                Rewrite with a note ({piece.rewrites_requested}/{MAX_REWRITES} used)
+              </button>
+            ) : null}
 
             {/* The escape hatch: a rewrite that never finished used to leave
                 this piece permanently unrewritable behind a disabled button.
@@ -275,25 +288,27 @@ function PieceReview({
             value={body}
             onChange={(e) => setBody(e.target.value)}
           />
-          <textarea
-            className={`${inputClass} min-h-12`}
-            placeholder="Personalization note"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-          />
+          {/* Personalization is never editable here: it's the specific fact
+              the citation check verified against the lead's own source
+              evidence, and a hand-edit could quietly detach it from that
+              evidence without the checker ever seeing it happen. Shown
+              read-only so the person editing still sees what it says. */}
+          <p className="rounded-[8px] border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 py-2 text-xs text-[var(--text-muted)]">
+            Personalization (not editable): {chosen.personalization_note}
+          </p>
           <div className="flex gap-2">
             <button
               type="button"
-              className="rounded-full px-3 py-1 text-xs font-medium text-white"
-              style={{ background: "var(--accent)" }}
+              className="cursor-pointer rounded-full px-3 py-1 text-xs font-medium transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              style={{ background: "var(--accent)", color: "var(--accent-text)" }}
               disabled={busy}
-              onClick={() => post(`${base}/edit`, { subject, body, personalization_note: note })}
+              onClick={() => post(`${base}/edit`, { subject, body })}
             >
               Save edit
             </button>
             <button
               type="button"
-              className="rounded-full border border-[var(--border-strong)] px-3 py-1 text-xs font-medium"
+              className="cursor-pointer rounded-full border border-[var(--border-strong)] px-3 py-1 text-xs font-medium transition-colors hover:bg-[var(--surface-2)]"
               onClick={() => setMode("view")}
             >
               Cancel
@@ -311,8 +326,8 @@ function PieceReview({
           <div className="flex gap-2">
             <button
               type="button"
-              className="rounded-full px-3 py-1 text-xs font-medium text-white"
-              style={{ background: "var(--accent)" }}
+              className="cursor-pointer rounded-full px-3 py-1 text-xs font-medium transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              style={{ background: "var(--accent)", color: "var(--accent-text)" }}
               disabled={busy || !rewriteNote.trim()}
               onClick={() => post(`${base}/rewrite`, { note: rewriteNote })}
             >
@@ -320,7 +335,7 @@ function PieceReview({
             </button>
             <button
               type="button"
-              className="rounded-full border border-[var(--border-strong)] px-3 py-1 text-xs font-medium"
+              className="cursor-pointer rounded-full border border-[var(--border-strong)] px-3 py-1 text-xs font-medium transition-colors hover:bg-[var(--surface-2)]"
               onClick={() => setMode("view")}
             >
               Cancel
@@ -330,9 +345,15 @@ function PieceReview({
       )}
 
       {/* A disabled button with no explanation is the thing that strands
-          people. If a rewrite isn't possible right now, say why AND what to do
-          instead — and say it before the click, not after a failed one. */}
-      {mode === "view" && !canRewrite.available && canRewrite.reason ? (
+          people. If editing or a rewrite isn't possible right now, say why
+          AND what to do instead — and say it before the click, not after a
+          failed one. */}
+      {mode === "view" && !chosen.reviewed && !canEdit.available && canEdit.reason ? (
+        <p className="mt-2 max-w-prose text-xs" style={{ color: "var(--text-muted)" }}>
+          {canEdit.reason}
+        </p>
+      ) : null}
+      {mode === "view" && !chosen.reviewed && !canRewrite.available && canRewrite.reason ? (
         <p
           className="mt-2 max-w-prose text-xs"
           style={{ color: phase === "abandoned" ? "var(--error)" : "var(--text-muted)" }}

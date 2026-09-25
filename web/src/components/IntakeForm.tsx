@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState, forwardRef, useImperativeHandle } from "react";
 import { useRouter } from "next/navigation";
 import { intakeFormSchema, COMPANY_SIZE_BANDS } from "@/lib/icp";
 import { KNOWN_PLACES } from "@/lib/geography";
@@ -36,10 +36,12 @@ const FIELD_ORDER = [
   "buyerPersona",
   "businessProblem",
   "notes",
-  // mustHave/niceToHave/skipIf are deliberately absent: TagInput already
-  // blocks adding a gibberish or duplicate item before it can ever enter the
-  // list (see canAdd below), so those fields cannot fail at submit time —
-  // nothing to scroll to that submit itself could produce.
+  // mustHave/niceToHave/skipIf are deliberately absent: submit() commits any
+  // pending typed-but-not-added text in those fields first (see
+  // TagInput.commitPending below), so by the time zod runs, each list is
+  // either the user's real intent or submit already stopped on a duplicate/
+  // gibberish pending entry with its own inline message. Nothing left here
+  // for zod to reject that would need a scroll target.
 ] as const;
 
 const EMPTY = {
@@ -58,6 +60,9 @@ export function IntakeForm() {
   const [mustHave, setMustHave] = useState<string[]>([]);
   const [niceToHave, setNiceToHave] = useState<string[]>([]);
   const [skipIf, setSkipIf] = useState<string[]>([]);
+  const mustHaveRef = useRef<TagInputHandle>(null);
+  const niceToHaveRef = useRef<TagInputHandle>(null);
+  const skipIfRef = useRef<TagInputHandle>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [pending, setPending] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -75,14 +80,26 @@ export function IntakeForm() {
     e.preventDefault();
     setSubmitError(null);
 
+    // Text typed into a Must have/Nice to have/Skip if box but never
+    // committed with "Add" or Enter must never be silently dropped here —
+    // that is exactly how a real hard filter the user typed can vanish with
+    // no chip, no error, and nothing for the clarity check to ever see. Each
+    // ref commits its own pending text (or returns null if it can't, because
+    // it's a duplicate or gibberish, in which case that field's own inline
+    // message is already visible and submit stops rather than losing it).
+    const committedMustHave = mustHaveRef.current?.commitPending();
+    const committedNiceToHave = niceToHaveRef.current?.commitPending();
+    const committedSkipIf = skipIfRef.current?.commitPending();
+    if (!committedMustHave || !committedNiceToHave || !committedSkipIf) return;
+
     const band = COMPANY_SIZE_BANDS.find((b) => b.label === values.companySizeBand);
     const parsed = intakeFormSchema.safeParse({
       ...values,
       minEmployees: band?.min,
       maxEmployees: band?.max,
-      mustHave,
-      niceToHave,
-      skipIf,
+      mustHave: committedMustHave,
+      niceToHave: committedNiceToHave,
+      skipIf: committedSkipIf,
     });
 
     if (!parsed.success) {
@@ -141,7 +158,7 @@ export function IntakeForm() {
         <div className="grid gap-4 px-5 py-5 sm:grid-cols-2">
           <Field
             label="Industry"
-            hint="Specific enough to search. “Tech” is too broad."
+            hint="Specific enough to search. “Business” is too broad."
             error={errors.industry}
           >
             <input
@@ -252,18 +269,21 @@ export function IntakeForm() {
         <CardHeader title="Your requirements" meta="You decide which are strict" />
         <div className="space-y-5 px-5 py-5">
           <TagInput
+            ref={mustHaveRef}
             label="Must have"
             hint="Hard filters beyond industry, geography and size — those three are always strict and have their own fields above. Every must-have needs evidence before a company can qualify."
             items={mustHave}
             onChange={setMustHave}
           />
           <TagInput
+            ref={niceToHaveRef}
             label="Nice to have"
             hint="Raise or lower the confidence score. They never disqualify anyone."
             items={niceToHave}
             onChange={setNiceToHave}
           />
           <TagInput
+            ref={skipIfRef}
             label="Skip if"
             hint="Rule a company out only when there's evidence for it. “Can't tell” is never a reason to skip."
             items={skipIf}
@@ -306,17 +326,25 @@ export function IntakeForm() {
   );
 }
 
-function TagInput({
-  label,
-  hint,
-  items,
-  onChange,
-}: {
-  label: string;
-  hint: string;
-  items: string[];
-  onChange: (next: string[]) => void;
-}) {
+type TagInputHandle = {
+  /**
+   * Commits any text still sitting in the box (not yet added) into the list
+   * and returns the resulting array. Returns null if that text is a
+   * duplicate or gibberish, rather than the list unchanged, so the caller
+   * knows to stop instead of silently proceeding as if nothing was typed.
+   */
+  commitPending: () => string[] | null;
+};
+
+const TagInput = forwardRef<
+  TagInputHandle,
+  {
+    label: string;
+    hint: string;
+    items: string[];
+    onChange: (next: string[]) => void;
+  }
+>(function TagInput({ label, hint, items, onChange }, ref) {
   const [entry, setEntry] = useState("");
   const trimmed = entry.trim();
   const duplicate = items.some((i) => i.toLowerCase() === trimmed.toLowerCase());
@@ -328,6 +356,17 @@ function TagInput({
     onChange([...items, trimmed]);
     setEntry("");
   }
+
+  useImperativeHandle(ref, () => ({
+    commitPending() {
+      if (trimmed.length === 0) return items;
+      if (!canAdd) return null;
+      const next = [...items, trimmed];
+      onChange(next);
+      setEntry("");
+      return next;
+    },
+  }));
 
   return (
     <div>
@@ -389,4 +428,4 @@ function TagInput({
       </div>
     </div>
   );
-}
+});

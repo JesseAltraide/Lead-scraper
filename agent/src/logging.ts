@@ -66,6 +66,16 @@ export function wrapTool<Args>(
       return { ok: false, code: g.code, message: g.message };
     }
 
+    // Live "what's happening right now" signal for the UI (disabling Stop
+    // during a scrape, showing a drafting spinner) — cleared unconditionally
+    // in `finally` so a thrown handler never leaves it stuck on. A failure to
+    // set/clear this must never take the run down, same posture as log().
+    await db
+      .from("runs")
+      .update({ active_tool: toolName })
+      .eq("id", ctx.runId)
+      .then(() => {}, () => {});
+
     try {
       const data = await handler(args, ctx);
       await log(ctx.runId, toolName, purpose, args, "ok", data, null, Date.now() - startedAt);
@@ -77,6 +87,12 @@ export function wrapTool<Args>(
       const status = g.code === "UNKNOWN" ? "error" : "refused";
       await log(ctx.runId, toolName, purpose, args, status, null, g.message, Date.now() - startedAt);
       return { ok: false, code: g.code, message: g.message };
+    } finally {
+      await db
+        .from("runs")
+        .update({ active_tool: null })
+        .eq("id", ctx.runId)
+        .then(() => {}, () => {});
     }
   };
 }

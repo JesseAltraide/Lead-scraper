@@ -5,8 +5,6 @@ description: Check the lead list against the quality standard before ending a ru
 
 # Lead-List Quality
 
-Source: `assets/lead-list-quality-guide.md`.
-
 ## Required checks
 
 - The list contains the target number of **qualified** companies

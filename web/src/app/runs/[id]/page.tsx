@@ -1,13 +1,15 @@
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
-import { serverClient, requireUser } from "@/lib/supabase-server";
+import { serverClient, serviceClient, getAuthState } from "@/lib/supabase-server";
 import { RUN_STATES, isRunStatus, type RunStatus } from "@/lib/runStates";
 import { Badge, Card, CardHeader, EmptyState } from "@/components/ui";
 import { RunActions } from "@/components/RunActions";
 import { IcpSummary } from "@/components/IcpSummary";
 import { ClarifyForm } from "@/components/ClarifyForm";
 import { IcpFields } from "@/components/IcpFields";
+import { StageTracker } from "@/components/StageTracker";
 import { LEAD_TABS, TAB_LABEL, LEAD_TONE } from "@/lib/leadDisplay";
+import { splitSummary } from "@/lib/textSummary";
 import type { Icp } from "@/lib/icp";
 import type { ClarificationItem } from "@/lib/clarityCheck";
 
@@ -27,8 +29,38 @@ const STAGE_LABEL: Record<string, { text: string; tone: string }> = {
 export default async function RunPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
 
-  const user = await requireUser();
+  const { user, offline } = await getAuthState();
+  // Same reasoning as the homepage: a dropped connection must not look like
+  // a logged-out visitor and send someone with a valid session to sign-in.
+  if (!user && offline) {
+    return (
+      <main className="mx-auto w-full max-w-4xl px-5 py-10">
+        <EmptyState
+          title="Can't reach the server"
+          detail="This looks like a connection problem, not a sign-in issue. Check your internet connection and reload."
+        />
+      </main>
+    );
+  }
   if (!user) redirect("/sign-in");
+
+  // Backstop for the agent server's own sweep (agent/src/index.ts): that one
+  // runs inside the very process whose death is the failure it's meant to
+  // catch, so an agent server that's actually down never sweeps itself. This
+  // page is rendered by the WEB server, a separate process, on every poll
+  // (every 3s while a run is live, see useLiveRun) — so it's what actually
+  // notices a run stuck past 5 minutes with no heartbeat when the agent
+  // server can't notice it itself, and resets it to a real, actionable state
+  // (failed, with Retry) instead of leaving the screen saying "may just be
+  // slow" forever. serviceClient because sweep_stalled_runs acts across the
+  // whole table, not just this user's own row — its result is discarded, not
+  // returned to the browser, so nothing here leaks another user's data.
+  try {
+    await serviceClient().rpc("sweep_stalled_runs", { p_stale_minutes: 5 });
+  } catch {
+    // Best-effort — a failed sweep must never block the page itself from
+    // rendering the run's current (unswept) state.
+  }
 
   const supabase = await serverClient();
 
@@ -101,6 +133,32 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
   const allLeads = leads ?? [];
   const qualified = allLeads.filter((l) => l.status === "qualified");
 
+  // The furthest stage this run has actually reached, for StageTracker: once
+  // a stage has happened at least once, it stays the highlighted stage
+  // through the gaps between tool calls (discovering, checking list quality)
+  // rather than going dark until the exact instant a matching tool call is
+  // in flight. `queued`/`screened_out` only ever come from screen_candidates,
+  // never from discovery itself (which only ever sets `discovered` or
+  // `excluded_no_website`), so their presence proves screening has run.
+  // Any candidate row at all, of any stage, proves discover_companies ran —
+  // it is the only tool that ever inserts one.
+  const hasSearched = allCandidates.length > 0;
+  const hasScreened = allCandidates.some((c) => ["queued", "screened_out"].includes(c.stage));
+  const hasScraped = allCandidates.some((c) =>
+    ["scraped", "scrape_failed", "qualified_done"].includes(c.stage),
+  );
+  const hasQualified = allLeads.length > 0;
+  const { count: draftPieceCount } = hasQualified
+    ? await supabase
+        .from("draft_pieces")
+        .select("id", { count: "exact", head: true })
+        .in(
+          "lead_id",
+          allLeads.map((l) => l.id),
+        )
+    : { count: 0 };
+  const hasDrafted = (draftPieceCount ?? 0) > 0;
+
   // What this run actually CONTAINS, which decides what is possible alongside
   // its status. A run cancelled during the clarifying questions has no ICP, so
   // every action needing one is impossible whatever the status says.
@@ -112,7 +170,35 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
 
   // Changes whenever anything the screen displays changes, so the poll can tell
   // a refresh that landed from one that silently did nothing.
-  const changeKey = [run.updated_at, run.status, allCandidates.length, allLeads.length].join("|");
+  const changeKey = [
+    run.updated_at,
+    run.status,
+    allCandidates.length,
+    allLeads.length,
+    run.active_tool,
+    hasScreened,
+    hasScraped,
+    hasQualified,
+    hasDrafted,
+  ].join("|");
+
+  // wrapTool (agent/src/logging.ts) sets active_tool to the tool name for the
+  // duration of each call and clears it after. Read live off the same run
+  // row this page already polls, no separate signal needed.
+  const isReadingWebsite = status === "researching" && run.active_tool === "scrape_website";
+  // Same reasoning as scraping: discover_companies already claims budget and
+  // calls Apify before this page ever sees it as "in flight", so a stop that
+  // took effect immediately would still let a few more candidates land a
+  // moment later (the in-flight search finishing on its own, which is
+  // correct, that spend is already committed) with no warning that more was
+  // coming. Blocking Stop until it finishes makes the two cases consistent
+  // instead of scraping being the only one explained up front.
+  const isSearching = status === "researching" && run.active_tool === "discover_companies";
+  const blocked = isReadingWebsite
+    ? { stop_run: "A website is being read right now. Stop will apply as soon as this finishes." }
+    : isSearching
+      ? { stop_run: "Companies are being searched for right now. Stop will apply as soon as this finishes." }
+      : {};
 
   return (
     <main className="mx-auto max-w-4xl space-y-5 px-5 py-10">
@@ -128,7 +214,10 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
         </div>
 
         {/* Failure states say WHICH step failed and why, read from the run
-            record and its events — never inferred from the status code. */}
+            record and its events, never inferred from the status code. The
+            agent writes a full technical explanation; only its first
+            sentence shows up front, the rest sits behind "Technical details"
+            rather than dumping a paragraph on the user right away. */}
         {status === "failed" && (run.failure_reason || run.failed_step) ? (
           <div
             className="rounded-[var(--radius)] px-4 py-3 text-sm"
@@ -137,7 +226,7 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
             <p className="font-medium">
               Failed during: {run.failed_step ?? "an unrecorded step"}
             </p>
-            {run.failure_reason ? <p className="mt-1">{run.failure_reason}</p> : null}
+            {run.failure_reason ? <ReasonDetail text={run.failure_reason} /> : null}
           </div>
         ) : null}
 
@@ -146,7 +235,7 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
             className="rounded-[var(--radius)] px-4 py-3 text-sm"
             style={{ background: "var(--partial-bg)", color: "var(--partial)" }}
           >
-            {run.stopping_reason}
+            <ReasonDetail text={run.stopping_reason} />
           </div>
         ) : null}
       </header>
@@ -183,10 +272,21 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
               ctx={ctx}
               changeKey={changeKey}
               live={spec.live}
+              blocked={blocked}
             />
           </div>
         </Card>
       )}
+
+      <StageTracker
+        status={status}
+        activeTool={run.active_tool}
+        hasSearched={hasSearched}
+        hasScreened={hasScreened}
+        hasScraped={hasScraped}
+        hasQualified={hasQualified}
+        hasDrafted={hasDrafted}
+      />
 
       {/* --- ICP (Phase 7: shown at every status once it exists, not only at
           icp_ready's confirm screen — "the run's ICP" is part of what a
@@ -323,9 +423,18 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
           render every lead's Evidence panel and Outreach-drafts panel inline,
           which made the page unusable once several leads existed. The full
           review — three tabs, Qualified / Not sure / Not qualified — lives on
-          its own page now. */}
+          its own page now.
 
-      {allLeads.length > 0 ? (
+          Gated on !spec.live (true for every status except `researching`),
+          not just allLeads.length > 0: without this, the very first lead to
+          qualify made "See the leads" appear mid-run, well before the agent
+          was done qualifying/drafting the rest — encouraging a review of a
+          still-incomplete list. `researching` is the only live status, so
+          this now shows exactly when the REVIEW action itself is offered
+          elsewhere on this page (completed/completed_partial/failed/
+          cancelled), never before. */}
+
+      {allLeads.length > 0 && !spec.live ? (
         <Card>
           <CardHeader title="Leads" />
           <div className="flex flex-wrap items-center gap-3 px-5 py-4" id="review">
@@ -371,6 +480,28 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
         </Card>
       ) : null}
     </main>
+  );
+}
+
+/**
+ * Shows the plain-language first sentence of an agent-written explanation up
+ * front, with the rest (the full technical reasoning, budget counts, tool
+ * names) available on demand rather than shown by default.
+ */
+function ReasonDetail({ text }: { text: string }) {
+  const { headline, technical } = splitSummary(text);
+  return (
+    <>
+      <p className="mt-1">{headline}</p>
+      {technical ? (
+        <details className="mt-1">
+          <summary className="cursor-pointer text-xs underline underline-offset-2 opacity-80">
+            Technical details
+          </summary>
+          <p className="mt-1 text-xs opacity-90">{technical}</p>
+        </details>
+      ) : null}
+    </>
   );
 }
 

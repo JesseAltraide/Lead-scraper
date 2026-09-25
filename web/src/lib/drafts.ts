@@ -39,8 +39,9 @@ export type DraftPiece = {
   piece_key: PieceKey;
   rewrites_requested: number;
   rewrite_in_flight: boolean;
-  /** Needed to tell a running rewrite from an abandoned one — see draftStates.ts. */
+  /** Needed to tell a running rewrite from an abandoned one, see draftStates.ts. */
   rewrite_claimed_at: string | null;
+  edits_requested: number;
 };
 
 /** One version's position among its siblings, oldest first — for "Version X of Y". */

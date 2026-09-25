@@ -7,7 +7,7 @@ import {
   AlignmentType,
   BorderStyle,
 } from "docx";
-import { LEAD_TABS, TAB_LABEL, VERDICT_LABEL, type FilterResult } from "./leadDisplay";
+import { LEAD_TABS, TAB_LABEL } from "./leadDisplay";
 import { PIECE_KEYS, PIECE_LABELS, type PieceKey } from "./drafts";
 import type { DraftPiece, DraftVersion } from "./drafts";
 
@@ -26,18 +26,11 @@ type Lead = {
   company_name: string;
   domain: string;
   status: string;
-  confidence: number;
-  confidence_basis: string;
-  fit_reasons: string[];
-  concerns: string[];
-  source_urls: string[];
-  source_summary: string;
 };
 
 export type ExportData = {
   runLabel: string;
   leads: Lead[];
-  filtersByLead: Map<string, FilterResult[]>;
   piecesByLead: Map<string, DraftPiece[]>;
   versionsByPiece: Map<string, DraftVersion[]>;
 };
@@ -67,8 +60,12 @@ function labeledLine(label: string, value: string): Paragraph {
   });
 }
 
-function chosenVersion(versions: DraftVersion[]): DraftVersion | undefined {
-  return versions.find((v) => v.is_chosen);
+// Only a REVIEWED chosen version is exported — an unreviewed draft is still
+// an unverified AI first pass, not something ready to leave this app. Matches
+// the same reviewed gate the leads page and export route use to decide
+// whether exporting is available at all, applied here per piece.
+function chosenReviewedVersion(versions: DraftVersion[]): DraftVersion | undefined {
+  return versions.find((v) => v.is_chosen && v.reviewed);
 }
 
 function draftSection(pieces: DraftPiece[], versionsByPiece: Map<string, DraftVersion[]>): Paragraph[] {
@@ -84,7 +81,7 @@ function draftSection(pieces: DraftPiece[], versionsByPiece: Map<string, DraftVe
     const piece = pieces.find((p) => p.piece_key === key);
     if (!piece) continue;
     const versions = versionsByPiece.get(piece.id) ?? [];
-    const chosen = chosenVersion(versions);
+    const chosen = chosenReviewedVersion(versions);
     if (!chosen) continue;
 
     paras.push(
@@ -100,7 +97,7 @@ function draftSection(pieces: DraftPiece[], versionsByPiece: Map<string, DraftVe
         children: [
           new TextRun({
             text: `Personalization: ${chosen.personalization_note}${
-              chosen.citation_source_url ? ` — ${chosen.citation_source_url}` : ""
+              chosen.citation_source_url ? ` (${chosen.citation_source_url})` : ""
             }`,
             italics: true,
             color: MUTED_COLOR,
@@ -115,9 +112,11 @@ function draftSection(pieces: DraftPiece[], versionsByPiece: Map<string, DraftVe
   return paras;
 }
 
+// The export is deliberately just a name and the drafts to send — not the
+// full review evidence (confidence, hard filters, fit/concerns, sources),
+// which stays on the leads page for the person deciding whether to act.
 function leadSection(
   lead: Lead,
-  filters: FilterResult[],
   pieces: DraftPiece[],
   versionsByPiece: Map<string, DraftVersion[]>,
 ): Paragraph[] {
@@ -129,40 +128,18 @@ function leadSection(
       ],
       spacing: { before: 280, after: 60 },
     }),
-    labeledLine("Confidence", `${lead.confidence}/100 — ${lead.confidence_basis}`),
   ];
 
-  if (lead.source_summary) paras.push(muted(lead.source_summary));
-
-  if (filters.length > 0) {
-    paras.push(
-      new Paragraph({
-        children: [new TextRun({ text: "Hard filters", bold: true, size: 19 })],
-        spacing: { before: 100, after: 60 },
-      }),
-    );
-    for (const f of filters) {
-      paras.push(
-        new Paragraph({
-          bullet: { level: 0 },
-          children: [
-            new TextRun({ text: `${VERDICT_LABEL[f.verdict]}: `, bold: true }),
-            new TextRun({ text: f.filter_text }),
-            ...(f.evidence ? [new TextRun({ text: ` — ${f.evidence}`, color: MUTED_COLOR })] : []),
-          ],
-        }),
-      );
-    }
-  }
-
-  if (lead.fit_reasons.length) paras.push(labeledLine("Fit", lead.fit_reasons.join("; ")));
-  if (lead.concerns.length) paras.push(labeledLine("Concerns", lead.concerns.join("; ")));
-
-  if (lead.status === "qualified") {
-    paras.push(...draftSection(pieces, versionsByPiece));
-  }
+  paras.push(...draftSection(pieces, versionsByPiece));
 
   return paras;
+}
+
+// A piece row can exist without a chosen version yet (claimed, or the write
+// failed), and a chosen version can still be unreviewed — only a REVIEWED
+// chosen version is actually a draft worth exporting.
+function hasReviewedDraft(pieces: DraftPiece[], versionsByPiece: Map<string, DraftVersion[]>): boolean {
+  return pieces.some((p) => (versionsByPiece.get(p.id) ?? []).some((v) => v.is_chosen && v.reviewed));
 }
 
 export function buildLeadsDocument(data: ExportData): Document {
@@ -174,7 +151,7 @@ export function buildLeadsDocument(data: ExportData): Document {
     new Paragraph({
       children: [
         new TextRun({
-          text: `Exported ${new Date().toLocaleDateString()} — drafts are for review, nothing here has been sent.`,
+          text: `Exported ${new Date().toLocaleDateString()}. Drafts are for review, nothing here has been sent.`,
           italics: true,
           color: MUTED_COLOR,
           size: 18,
@@ -186,7 +163,14 @@ export function buildLeadsDocument(data: ExportData): Document {
   ];
 
   for (const tab of LEAD_TABS) {
-    const tabLeads = data.leads.filter((l) => l.status === tab);
+    // Only a lead with at least one REVIEWED chosen draft version is worth
+    // exporting — the file is meant to be handed to someone as ready-to-send
+    // copy someone has actually looked at, not a database dump of whatever
+    // the agent wrote, so a lead with no reviewed draft yet has nothing to
+    // show here.
+    const tabLeads = data.leads.filter(
+      (l) => l.status === tab && hasReviewedDraft(data.piecesByLead.get(l.id) ?? [], data.versionsByPiece),
+    );
     children.push(heading(`${TAB_LABEL[tab]} (${tabLeads.length})`, HeadingLevel.HEADING_1));
     if (tabLeads.length === 0) {
       children.push(muted("None."));
@@ -194,12 +178,7 @@ export function buildLeadsDocument(data: ExportData): Document {
     }
     for (const lead of tabLeads) {
       children.push(
-        ...leadSection(
-          lead,
-          data.filtersByLead.get(lead.id) ?? [],
-          data.piecesByLead.get(lead.id) ?? [],
-          data.versionsByPiece,
-        ),
+        ...leadSection(lead, data.piecesByLead.get(lead.id) ?? [], data.versionsByPiece),
       );
     }
   }

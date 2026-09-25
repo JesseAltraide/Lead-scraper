@@ -1,9 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { actionsFor, type RunAction, type RunContext, type RunStatus } from "@/lib/runStates";
 import { useLiveRun } from "./useLiveRun";
+
+// A run that just finished landed on a page showing "website read" with no
+// visible drafts. The actual review (qualified/not sure/not qualified, plus
+// drafts) lives entirely on the leads page now, so rather than leave the user
+// looking at that confusing in-between state, follow the run there
+// automatically the moment it finishes with something to show.
+const DRAFTS_READY: RunStatus[] = ["completed", "completed_partial"];
 
 /**
  * Renders the action buttons for a run.
@@ -61,6 +68,18 @@ export function RunActions({
   const [pending, setPending] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Only fires on a live -> finished transition observed while this page is
+  // open, never on a fresh page load of a run that was already finished. That
+  // keeps "back to run" from the leads page from immediately bouncing the
+  // user right back there.
+  const wasLive = useRef(live);
+  useEffect(() => {
+    if (wasLive.current && !live && ctx.hasLeads && DRAFTS_READY.includes(status)) {
+      router.push(`/runs/${runId}/leads`);
+    }
+    wasLive.current = live;
+  }, [live, status, ctx.hasLeads, router, runId]);
 
   const actions = actionsFor(status, ctx);
 
@@ -186,16 +205,19 @@ export function RunActions({
       ) : null}
 
       {/* A frozen screen that claims to be live is worse than one that admits
-          it is stuck. */}
+          it is stuck. No manual "Check now" here — this page already polls
+          every 3s on its own (useLiveRun), so a manual check can't learn
+          anything sooner; it only invited the impression that refreshing was
+          necessary. The actual backstop is server-side: sweep_stalled_runs
+          (called from this page's own server component AND from the agent's
+          own interval) resets a run stuck past 5 minutes with no heartbeat to
+          `failed`, at which point this message disappears on its own because
+          the run is no longer live. */}
       {stalled ? (
-        <p className="flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]">
-          <span>
-            No update for {staleSeconds}s. The run may just be slow — nothing here is lost either
-            way.
-          </span>
-          <button type="button" className="underline underline-offset-2" onClick={refreshNow}>
-            Check now
-          </button>
+        <p className="text-xs text-[var(--text-muted)]">
+          No update for {staleSeconds}s. The run may just be slow, nothing here is lost either way.
+          If we still can&apos;t reach the server after 5 minutes total, this run will be reset to its
+          last saved state and marked failed, with Retry available to pick back up from there.
         </p>
       ) : null}
     </div>

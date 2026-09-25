@@ -31,19 +31,27 @@ export async function checkEditQuality(input: {
 }): Promise<{ ok: true } | { ok: false; reason: string }> {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key || key.startsWith("REPLACE_ME")) {
-    // No key configured: fail open with a stated reason, same posture
-    // clarityCheck.ts takes when the AI check can't run — an edit is not
-    // blocked forever by missing configuration, but nothing is silently
-    // skipped without a trace either.
-    return { ok: true };
+    // Deliberately fails CLOSED, not open, per explicit user direction: this
+    // check exists specifically to catch an edit that drifted off the
+    // persona/problem/citation it was supposed to stay tied to, and letting
+    // an unverifiable edit through unchecked defeats that purpose. An edit is
+    // not lost, the reviewer's typed text is still sitting in the form, it
+    // just cannot be SAVED until the check can actually run.
+    return {
+      ok: false,
+      reason: "The quality check isn't configured right now, so this edit can't be saved yet. Try again once it's set up.",
+    };
   }
 
   const client = new Anthropic({ apiKey: key });
 
   // The call AND the parse are both inside the try: this runs inside the edit
   // request, so anything that throws here — an abort, a network error, a
-  // malformed reply — must fail open rather than 500 the request and lose the
-  // reviewer's typed edit. Same posture as the missing-key branch above.
+  // malformed reply — returns a clean ok:false rather than letting an
+  // unhandled exception 500 the request. The reviewer's typed edit is not
+  // lost either way (it stays in the form), it just can't be saved until the
+  // check can actually run. Same fail-closed posture as the missing-key
+  // branch above.
   //
   // The abort ceiling matters because a hung call would otherwise leave the
   // Save button spinning with no way out. `signal` rather than the SDK's
@@ -107,8 +115,13 @@ export async function checkEditQuality(input: {
       reason: verdict.reason?.trim() || "That edit doesn't hold up against the copywriting guide.",
     };
   } catch {
-    // Timed out, unreachable, or a malformed reply — fail open rather than
-    // block a reviewer's edit on infrastructure.
-    return { ok: true };
+    // Timed out, unreachable, or a malformed reply — fails CLOSED, per
+    // explicit user direction: an edit made while Claude happens to be down
+    // is exactly the case this check can't cover, so it says so plainly
+    // rather than silently saving an edit nothing actually verified.
+    return {
+      ok: false,
+      reason: "Claude is unreachable right now, so this edit can't be quality-checked. Try again shortly.",
+    };
   }
 }

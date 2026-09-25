@@ -43,8 +43,13 @@ const KNOWN_CODES = new Set([
   "REWRITE_UNAVAILABLE",
   "VERSION_NOT_FOUND",
   "INCOMPLETE_DRAFTS",
+  "UNPROCESSED_CANDIDATES",
   "BAD_REQUEST",
   "CITATION_INVALID",
+  // Provider outages — recognized so they log as a clean, distinguishable
+  // refusal rather than a generic "error".
+  "APIFY_ERROR",
+  "FIRECRAWL_UNAVAILABLE",
 ]);
 
 export function asGuardError(err: unknown): GuardError {

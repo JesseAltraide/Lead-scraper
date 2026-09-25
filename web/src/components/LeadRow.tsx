@@ -1,7 +1,22 @@
 import { Badge } from "@/components/ui";
 import { DraftReview } from "@/components/DraftReview";
+import { GenerateDraftsButton } from "@/components/GenerateDraftsButton";
 import { VERDICT_LABEL, VERDICT_TONE, type FilterResult } from "@/lib/leadDisplay";
-import type { DraftPiece, DraftVersion } from "@/lib/drafts";
+import { PIECE_KEYS, type DraftPiece, type DraftVersion } from "@/lib/drafts";
+
+// source_urls came from a scraped website via the agent, not from a user or
+// this app — untrusted, per CLAUDE.md. Only ever render it as a clickable
+// href when it actually parses as http(s); a javascript: or data: URL sitting
+// in scraped text must never become a clickable link.
+function safeHttpUrl(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") return url;
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
 
 type Lead = {
   id: string;
@@ -57,14 +72,34 @@ export function LeadRow({
           <p className="text-[var(--text-muted)]">{lead.source_summary}</p>
           {lead.source_urls.length > 0 ? (
             <ul className="flex flex-wrap gap-1.5">
-              {lead.source_urls.map((u) => (
-                <li
-                  key={u}
-                  className="rounded-full bg-[var(--surface-2)] px-2.5 py-1 text-[var(--text-muted)]"
-                >
-                  {u}
-                </li>
-              ))}
+              {lead.source_urls.map((u) => {
+                // "Not sure" leads above 50 confidence are worth a look — link
+                // out so the reviewer can decide for themselves rather than
+                // rely only on the agent's evidence summary. Below that, or on
+                // any other tab, this stays plain text. safeHttpUrl guards
+                // against a non-http(s) scheme reaching href from scraped text.
+                const href =
+                  lead.status === "needs_review" && lead.confidence > 50 ? safeHttpUrl(u) : undefined;
+                return href ? (
+                  <li key={u}>
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded-full bg-[var(--surface-2)] px-2.5 py-1 text-[var(--accent)] underline underline-offset-2 hover:opacity-80"
+                    >
+                      {u}
+                    </a>
+                  </li>
+                ) : (
+                  <li
+                    key={u}
+                    className="rounded-full bg-[var(--surface-2)] px-2.5 py-1 text-[var(--text-muted)]"
+                  >
+                    {u}
+                  </li>
+                );
+              })}
             </ul>
           ) : null}
 
@@ -81,7 +116,7 @@ export function LeadRow({
                 {f.evidence ? (
                   <p className="mt-1 text-[var(--text-muted)]">
                     {f.evidence}
-                    {f.evidence_source_url ? ` — ${f.evidence_source_url}` : ""}
+                    {f.evidence_source_url ? ` (${f.evidence_source_url})` : ""}
                   </p>
                 ) : null}
               </li>
@@ -103,7 +138,8 @@ export function LeadRow({
         </div>
       </details>
 
-      {lead.status === "qualified" ? (
+      {/* Any lead with a draft shows the panel, regardless of status. */}
+      {pieces.length > 0 ? (
         <details className="border-t border-[var(--border)] bg-[var(--surface-2)]">
           <summary className="cursor-pointer px-5 py-2 text-xs font-medium text-[var(--text-muted)]">
             Outreach drafts
@@ -115,6 +151,15 @@ export function LeadRow({
             versionsByPiece={versionsByPiece}
           />
         </details>
+      ) : null}
+
+      {/* Drafting for qualified/needs_review is required or optional
+          respectively, never automatic on the leads page itself — this is the
+          manual trigger for a lead still missing at least one piece, whether
+          because the agent judged a needs_review lead not worth drafting for,
+          or a qualified lead ran short when the run's budget ran out first. */}
+      {lead.status !== "not_qualified" && pieces.length < PIECE_KEYS.length ? (
+        <GenerateDraftsButton runId={runId} leadId={lead.id} />
       ) : null}
     </li>
   );

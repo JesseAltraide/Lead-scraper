@@ -20,6 +20,14 @@
 export const MAX_REWRITES = 3;
 
 /**
+ * Matches the cap enforced inside save_outreach_draft for origin='edit'.
+ * Added once edits started running an AI quality check on every save
+ * (checkEditQuality), unlike a plain database write, an edit now has a real
+ * token cost, so it needed the same kind of bound rewrites already had.
+ */
+export const MAX_EDITS = 3;
+
+/**
  * When a stuck rewrite may be cancelled by hand. The rewrite call itself is
  * capped at 60s by an AbortSignal, so a slot still in flight after two minutes
  * is certainly orphaned and releasing it is safe. This is what stops a user
@@ -32,6 +40,7 @@ export type DraftPieceState = {
   rewriteInFlight: boolean;
   /** ISO timestamp, or null for a slot claimed before 0008 added the column. */
   rewriteClaimedAt: string | null;
+  editsRequested: number;
 };
 
 export type RewritePhase =
@@ -84,10 +93,17 @@ export function draftActionAvailability(
   now: number | null,
 ): DraftActionAvailability {
   const phase = rewritePhase(state, now);
+  const editsCapped = state.editsRequested >= MAX_EDITS;
 
-  // Editing is always possible. It costs nothing, needs no slot, and is the
-  // fallback every other refusal below points at — so it must never be blocked.
-  if (action === "edit") return { available: true };
+  if (action === "edit") {
+    if (editsCapped) {
+      return {
+        available: false,
+        reason: `All ${MAX_EDITS} edits for this piece are used. This keeps the AI quality check on every edit from running unbounded — the version already saved stays as-is.`,
+      };
+    }
+    return { available: true };
+  }
 
   if (action === "cancel_rewrite") {
     if (phase === "abandoned") return { available: true };
@@ -107,7 +123,9 @@ export function draftActionAvailability(
   if (phase === "capped") {
     return {
       available: false,
-      reason: `All ${MAX_REWRITES} rewrites for this piece are used. You can still edit it directly — your edit is saved as a new version, and the earlier ones are kept.`,
+      reason: editsCapped
+        ? `All ${MAX_REWRITES} rewrites and all ${MAX_EDITS} edits for this piece are used. The current version stays as the final one.`
+        : `All ${MAX_REWRITES} rewrites for this piece are used. You can still edit it directly, your edit is saved as a new version, and the earlier ones are kept.`,
     };
   }
 

@@ -1,6 +1,6 @@
 import "server-only";
 import { createServerClient } from "@supabase/ssr";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type User } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -42,9 +42,34 @@ export function serviceClient() {
 }
 
 export async function requireUser() {
+  const { user } = await getAuthState();
+  return user;
+}
+
+/**
+ * Same lookup as requireUser, but also reports whether a missing user is a
+ * real "not signed in" versus this server failing to reach Supabase (e.g. no
+ * internet). Both cases return user: null from supabase-js, so without this
+ * a dropped connection looks identical to a logged-out visitor and sends
+ * someone with a perfectly valid session back to sign-in. Page components
+ * that redirect to /sign-in on no-user should check `offline` first.
+ */
+export async function getAuthState(): Promise<{ user: User | null; offline: boolean }> {
   const supabase = await serverClient();
   const {
     data: { user },
+    error,
   } = await supabase.auth.getUser();
-  return user;
+
+  if (user) return { user, offline: false };
+
+  // supabase-js reports a failed fetch (DNS, timeout, offline) as an
+  // AuthRetryableFetchError with status 0 (see @supabase/auth-js's
+  // fetch.js), not a real HTTP status and not undefined either — checking
+  // for undefined here missed every actual offline case. A genuine "you're
+  // not signed in" error (bad/expired session) always carries a real status
+  // code (400, 401, ...).
+  const status = (error as { status?: number } | null)?.status;
+  const offline = Boolean(error) && (status === 0 || status === undefined);
+  return { user: null, offline };
 }

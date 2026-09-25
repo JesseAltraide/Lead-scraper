@@ -204,6 +204,21 @@ export const RUN_STATES: Record<RunStatus, RunStateSpec> = {
     live: false,
     actions: [
       REVIEW,
+      // Plain resume, no limit change — for the common case of a MANUAL
+      // stop (plenty of budget left, the user just wants to pick back up).
+      // Reuses the exact same "retry" endpoint/action `failed` already uses:
+      // the agent's own /retry handler already accepts completed_partial,
+      // and this route's "retry" case already skips the limit-raising logic
+      // that only "continue_higher_limit" triggers — nothing new to wire up.
+      {
+        id: "retry",
+        label: "Continue from where it stopped",
+        tone: "primary",
+        endpoint: "retry",
+      },
+      // Distinct from the above: this one RAISES the limits, for when the
+      // run stopped because it genuinely ran out of budget, not because the
+      // user chose to pause it.
       {
         id: "continue_higher_limit",
         label: "Keep searching",
@@ -266,6 +281,18 @@ export function actionsFor(status: RunStatus, ctx: RunContext): RunAction[] {
     if (a.id === "continue_higher_limit" && ctx.continuesUsed >= MAX_CONTINUES) return false;
     return true;
   });
+
+  // The button said "Keep searching" every time, with no way to tell how many
+  // raises were left or that a given press was the last one — the run just
+  // stopped offering it afterward with no explanation. Real user confusion
+  // this caused: watching the cap climb (30 -> 35 -> 40 -> 45) with no visible
+  // ceiling looked like the limit itself was drifting, when MAX_CONTINUES
+  // already fixed it at a hard, known maximum the whole time.
+  actions = actions.map((a) =>
+    a.id === "continue_higher_limit"
+      ? { ...a, label: `${a.label} (${ctx.continuesUsed + 1} of ${MAX_CONTINUES})` }
+      : a,
+  );
 
   // No state is a dead end. If filtering left nothing to do, starting a fresh
   // search is always available.

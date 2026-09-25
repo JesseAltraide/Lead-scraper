@@ -5,8 +5,6 @@ description: Turn a submitted intake form into concrete, searchable ICP criteria
 
 # ICP Refinement
 
-Source: `assets/icp-refinement-guide.md`.
-
 ## Goal
 
 Establish who counts as a good-fit company **before** any tool call spends

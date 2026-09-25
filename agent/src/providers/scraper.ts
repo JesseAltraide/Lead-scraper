@@ -37,7 +37,25 @@ class FirecrawlProvider implements ScrapeProvider {
       signal: AbortSignal.timeout(90_000),
     });
 
-    if (!res.ok) return { error: `firecrawl returned ${res.status}` };
+    if (!res.ok) {
+      // 5xx/429 mean Firecrawl itself failed to do its job, not that the
+      // target site had nothing worth reading. Throw so this flows through
+      // the existing claim/release path in tools.ts (which now also refunds
+      // the spent scrape-budget slot) instead of being cached forever as a
+      // permanent "failed scrape" for a URL that was never actually tried.
+      if (res.status >= 500 || res.status === 429) {
+        // Plain statement first (this is what shows up front wherever this
+        // surfaces, see web/src/lib/textSummary.ts), the raw status stays
+        // attached for the technical detail.
+        throw new Error(
+          `FIRECRAWL_UNAVAILABLE: Firecrawl is down or unreachable right now. It returned ${res.status}.`,
+        );
+      }
+      // A 4xx other than 429 means Firecrawl processed the request and
+      // couldn't reach or read the target (blocked, not found, etc.), a
+      // real, chargeable, cacheable outcome about that specific site.
+      return { error: `firecrawl returned ${res.status}` };
+    }
 
     const json = (await res.json()) as { data?: { markdown?: string } };
     return { content: json.data?.markdown ?? "" };

@@ -9,6 +9,88 @@ import { notifySearchFinished } from "./notify.js";
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
+ * Only applied to a failure that happened during the actual Claude/agent-SDK
+ * call (see `inAgentSdkCall` at its call site below), so a database error
+ * from elsewhere in the run loop can never inherit this label. Rather than
+ * surface whatever raw SDK error string came back as the first thing a user
+ * reads, name the actual problem plainly when it's recognizable as one of
+ * these, keeping the original message attached for the technical detail.
+ */
+function describeAgentFailure(message: string): string {
+  const lower = message.toLowerCase();
+  const looksLikeAgentOutage =
+    lower.includes("anthropic") ||
+    lower.includes("claude") ||
+    lower.includes("overloaded") ||
+    lower.includes("rate_limit") ||
+    lower.includes("rate limit") ||
+    lower.includes("timed out") ||
+    lower.includes("timeout") ||
+    lower.includes("529") ||
+    lower.includes("authentication_error") ||
+    lower.includes("invalid_api_key") ||
+    lower.includes("connection error") ||
+    lower.includes("internal_server_error");
+
+  return looksLikeAgentOutage ? `Claude is down or unreachable right now. ${message}` : message;
+}
+
+/**
+ * The auto-complete path (the SDK loop ended without the agent calling
+ * finish_run) used one flat message regardless of WHY nothing came of it — a
+ * genuine "Apify searched and found nothing" run read identically to "Apify
+ * was down the whole time and every search attempt was refused". Both are
+ * real, different outcomes: one means the criteria are too narrow or the
+ * provider has nothing for them, the other means nothing was actually
+ * searched at all. Checked against `tool_calls`, which wrapTool (logging.ts)
+ * writes on every call including refusals, rather than guessing from turn
+ * count alone.
+ */
+async function describeEmptyRunOutcome(runId: string): Promise<string> {
+  // NOT runs.candidates_pulled: that column is incremented at BUDGET-CLAIM
+  // time, before Apify is even called (see claim_candidate_budget in
+  // 0002_guards.sql), using the granted/requested amount — so it stays
+  // nonzero even when Apify genuinely returns zero real companies. The only
+  // honest signal for "did any candidates actually get found" is a count of
+  // the actual candidates rows discover_companies inserted.
+  const { count: candidateCount } = await db
+    .from("candidates")
+    .select("id", { count: "exact", head: true })
+    .eq("run_id", runId);
+
+  // FIRECRAWL_UNAVAILABLE only ever comes from scrape_website, never from
+  // discover_companies (that one only ever throws APIFY_ERROR) — checking
+  // both tool names, not just discover_companies, is what actually lets both
+  // branches below fire; filtering to discover_companies alone would make
+  // the Firecrawl branch permanently unreachable.
+  const { data: recentCalls } = await db
+    .from("tool_calls")
+    .select("error_message")
+    .eq("run_id", runId)
+    .in("tool_name", ["discover_companies", "scrape_website"])
+    .eq("status", "refused")
+    .order("created_at", { ascending: false })
+    .limit(5);
+
+  const outageMessage = (recentCalls ?? []).find(
+    (c) => c.error_message?.startsWith("APIFY_ERROR") || c.error_message?.startsWith("FIRECRAWL_UNAVAILABLE"),
+  )?.error_message;
+
+  if (outageMessage) {
+    const isApify = outageMessage.startsWith("APIFY_ERROR");
+    const provider = isApify ? "Apify" : "Firecrawl";
+    const whatFailed = isApify ? "companies could be searched for" : "websites could be read";
+    return `The agent stopped because ${provider} could not be reached, not because it ran out of turns. No ${whatFailed} this way, this was a provider outage, not a real "nothing found" result. Check ${provider} and try again.`;
+  }
+
+  if ((candidateCount ?? 0) === 0) {
+    return "The agent stopped after searching, but found no candidates matching this criteria. This was a real search, not a provider problem, the criteria may be too narrow for what's out there.";
+  }
+
+  return "The agent stopped. Most likely the agent limit was reached.";
+}
+
+/**
  * Builds the prompt for a run. On a RETRY this includes everything already
  * done, so the agent resumes rather than restarting: work that already
  * succeeded is not redone, and the shared Apify budget is not spent twice on
@@ -112,9 +194,9 @@ async function buildPrompt(runId: string): Promise<string> {
     "",
     "1. `discover_companies` — pull candidates. The count comes from the run record.",
     "2. `screen_candidates` — judge every candidate on the SEARCH DATA ALONE first. Screening out is free; scraping costs money. Rule out clear misfits before reading any website.",
-    "3. `scrape_website` — read only candidates you queued.",
-    "4. `save_lead_qualification` — one verdict per hard filter, with its evidence. The status is derived from those verdicts; you cannot choose it.",
-    "5. `save_outreach_draft` — all four pieces, for qualified leads only.",
+    "3. `scrape_website` — read EVERY candidate you queued before qualifying ANY of them. Do not interleave scraping one company with qualifying another — `save_lead_qualification` refuses (UNPROCESSED_CANDIDATES) while any candidate in the run is still unscreened or unscraped and budget remains to process it.",
+    "4. `save_lead_qualification` — one verdict per hard filter, with its evidence. The status is derived from those verdicts; you cannot choose it. Only start this step once every candidate has been screened and, where queued, scraped.",
+    "5. `save_outreach_draft` — all four pieces, required for qualified leads, optional for needs_review ones, never for not_qualified. Only start writing drafts once EVERY candidate has been qualified (or ruled out) — `save_outreach_draft` refuses (UNPROCESSED_CANDIDATES) a lead's first draft while any candidate in the run is still unscreened, unscraped, or scraped but not yet qualified, with budget remaining to finish it.",
     "6. `check_list_quality`, then `finish_run` with a plain-language reason.",
     "",
     "Use the `lead-qualification`, `outbound-copywriting`, `lead-list-quality` and `outreach-safety` skills as you go.",
@@ -162,9 +244,16 @@ export async function runAgent(
 
   let turns = 0;
   let costUsd: number | null = null;
+  // Only true while a failure would genuinely mean the Claude/agent-SDK call
+  // itself failed — cleared as soon as that part finishes, so a DB error from
+  // buildPrompt or a later db.from(...) call can never inherit the "Claude is
+  // down" label a real SDK failure deserves.
+  let inAgentSdkCall = false;
 
   try {
     const prompt = await buildPrompt(runId);
+
+    inAgentSdkCall = true;
 
     const response = query({
       prompt,
@@ -206,6 +295,8 @@ export async function runAgent(
             "You cannot send anything. No tool exists to send an email or a LinkedIn message, to find or validate an email address, to delete a record, or to fetch an arbitrary URL. Everything you produce is a draft for a human to review.",
             "",
             "Every limit is read from the database by the tool that enforces it. Asking for more does not raise it.",
+            "",
+            "Never use an em dash (—). Use a comma, a period, or \"and\"/\"but\" instead.",
           ].join("\n"),
         },
       },
@@ -217,6 +308,7 @@ export async function runAgent(
         costUsd = "total_cost_usd" in message ? (message.total_cost_usd as number) : null;
       }
     }
+    inAgentSdkCall = false;
 
     if (costUsd != null) {
       await db.from("runs").update({ total_cost_usd: costUsd }).eq("id", runId);
@@ -229,12 +321,19 @@ export async function runAgent(
     if (after?.status === "researching") {
       await rpc("complete_run", {
         p_run_id: runId,
-        p_stopping_reason:
-          "The agent stopped without calling finish_run — most likely the agent-turn limit was reached. The leads below are what it completed.",
+        p_stopping_reason: await describeEmptyRunOutcome(runId),
+        // Genuine budget/turn exhaustion, not the agent choosing to cut
+        // corners on its own finish_run call (that path stays strict, see
+        // finishRunImpl in tools.ts), land honestly on completed/
+        // completed_partial with whatever's done so far reviewable and
+        // exportable, rather than refusing into a `failed` dead end whose
+        // only exits (Retry, Review-and-continue) don't lead to the leads
+        // that already exist.
+        p_allow_incomplete: true,
       }).catch(async (err) => {
-        // complete_run refused (e.g. a qualified lead is missing drafts). That
-        // is a genuine failure with a defined recovery action, not a silent
-        // half-complete run.
+        // Only reachable for something complete_run itself can't recover
+        // from (e.g. RUN_NOT_FOUND), a genuine failure with a defined
+        // recovery action, not a silent half-complete run.
         const g = asGuardError(err);
         await rpc("fail_run", {
           p_run_id: runId,
@@ -256,11 +355,14 @@ export async function runAgent(
   } catch (err) {
     const g = asGuardError(err);
     // Land in `failed` with the specific step and reason. The UI reads this
-    // event, and `failed` has a Retry that resumes.
+    // event, and `failed` has a Retry that resumes. The reason's first
+    // sentence is what shows up front on the run page (see
+    // web/src/lib/textSummary.ts), plainly naming what's actually down beats
+    // a raw SDK error string as the first thing a user sees.
     await rpc("fail_run", {
       p_run_id: runId,
       p_step: "agent_loop",
-      p_reason: g.message,
+      p_reason: inAgentSdkCall ? describeAgentFailure(g.message) : g.message,
     }).catch(() => {});
     await notifySearchFinished(runId, "failed");
     return { status: "failed", turns, costUsd };

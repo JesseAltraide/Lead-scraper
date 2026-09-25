@@ -1,14 +1,27 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { serverClient, requireUser } from "@/lib/supabase-server";
+import { serverClient, getAuthState } from "@/lib/supabase-server";
 import { RUN_STATES, isRunStatus, ACTIVE_STATUSES } from "@/lib/runStates";
-import { Badge, Card, CardHeader } from "@/components/ui";
+import { Badge, Card, CardHeader, EmptyState } from "@/components/ui";
 import { IntakeForm } from "@/components/IntakeForm";
 
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  const user = await requireUser();
+  const { user, offline } = await getAuthState();
+  // A dropped connection looks identical to "not signed in" (supabase-js
+  // returns user: null either way) — say so instead of bouncing someone with
+  // a perfectly valid session to sign-in.
+  if (!user && offline) {
+    return (
+      <main className="mx-auto w-full max-w-4xl px-5 py-10">
+        <EmptyState
+          title="Can't reach the server"
+          detail="This looks like a connection problem, not a sign-in issue. Check your internet connection and reload."
+        />
+      </main>
+    );
+  }
   if (!user) redirect("/sign-in");
 
   const supabase = await serverClient();

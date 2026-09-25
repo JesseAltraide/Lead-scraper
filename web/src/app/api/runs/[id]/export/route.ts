@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
 import { serverClient, requireUser } from "@/lib/supabase-server";
 import { renderLeadsDocx, type ExportData } from "@/lib/exportDocx";
-import type { FilterResult } from "@/lib/leadDisplay";
 import type { DraftPiece, DraftVersion } from "@/lib/drafts";
 import type { Icp } from "@/lib/icp";
+
+// Drafts only ever exist once check_list_quality has run, which only ever
+// happens on the way to one of these two statuses — exporting any earlier
+// (e.g. mid-`researching`) would hand back a file with qualified leads and no
+// drafts, which reads as broken rather than in-progress.
+const DRAFTS_READY_STATUSES = new Set(["completed", "completed_partial"]);
 
 /**
  * Exports a run's leads as a Word document, grouped the same way the leads
@@ -26,38 +31,32 @@ export async function GET(
 
   const supabase = await serverClient();
 
-  const { data: run } = await supabase.from("runs").select("id, icp").eq("id", id).maybeSingle();
+  const { data: run } = await supabase.from("runs").select("id, status, icp").eq("id", id).maybeSingle();
   if (!run) return NextResponse.json({ error: "Run not found." }, { status: 404 });
+  if (!DRAFTS_READY_STATUSES.has(run.status)) {
+    return NextResponse.json(
+      { error: "Drafts aren't ready yet — export becomes available once the run finishes." },
+      { status: 409 },
+    );
+  }
 
   const { data: leads } = await supabase
     .from("leads")
-    .select(
-      "id, company_name, domain, status, confidence, confidence_basis, fit_reasons, concerns, source_urls, source_summary",
-    )
+    .select("id, company_name, domain, status")
     .eq("run_id", id)
     .order("confidence", { ascending: false });
   const allLeads = leads ?? [];
 
-  const leadIds = allLeads.map((l) => l.id);
-  const { data: filterResults } = leadIds.length
-    ? await supabase
-        .from("lead_filter_results")
-        .select(
-          "lead_id, filter_key, filter_text, verdict, evidence, evidence_source_url, evidence_kind",
-        )
-        .in("lead_id", leadIds)
-    : { data: [] as FilterResult[] };
-  const filtersByLead = new Map<string, FilterResult[]>();
-  for (const f of filterResults ?? []) {
-    filtersByLead.set(f.lead_id, [...(filtersByLead.get(f.lead_id) ?? []), f as FilterResult]);
-  }
-
-  const qualifiedIds = allLeads.filter((l) => l.status === "qualified").map((l) => l.id);
-  const { data: draftPieces } = qualifiedIds.length
+  // Every lead with a draft gets it exported, regardless of status — fetch
+  // for all of them rather than pre-filtering by status.
+  const draftableIds = allLeads.map((l) => l.id);
+  const { data: draftPieces } = draftableIds.length
     ? await supabase
         .from("draft_pieces")
-        .select("id, lead_id, piece_key, rewrites_requested, rewrite_in_flight, rewrite_claimed_at")
-        .in("lead_id", qualifiedIds)
+        .select(
+          "id, lead_id, piece_key, rewrites_requested, rewrite_in_flight, rewrite_claimed_at, edits_requested",
+        )
+        .in("lead_id", draftableIds)
     : { data: [] as DraftPiece[] };
   const piecesByLead = new Map<string, DraftPiece[]>();
   for (const p of draftPieces ?? []) {
@@ -78,13 +77,29 @@ export async function GET(
     versionsByPiece.set(v.piece_id, [...(versionsByPiece.get(v.piece_id) ?? []), v as DraftVersion]);
   }
 
+  // A run can reach completed/completed_partial with zero drafts ever
+  // written (migration 0015 allows completing on budget exhaustion even with
+  // nothing qualified yet) — the leads page hides the export link for that
+  // case, but this refuses it directly too, so hitting the URL by hand or a
+  // stale link never hands back a document with nothing in it. Beyond that,
+  // exporting is for handing reviewed copy to someone, so it also requires at
+  // least one chosen version to have actually been looked at (reviewed=true)
+  // — matches the same gate the leads page uses to decide whether to show
+  // the link at all.
+  const hasReviewedDraft = (draftVersions ?? []).some((v) => v.is_chosen && v.reviewed);
+  if (!hasReviewedDraft) {
+    return NextResponse.json(
+      { error: "Nothing has been marked reviewed yet — there's nothing ready to export." },
+      { status: 409 },
+    );
+  }
+
   const icp = run.icp as Icp | null;
-  const runLabel = icp ? `${icp.industry} — ${icp.geography}` : `Run ${id.slice(0, 8)}`;
+  const runLabel = icp ? `${icp.industry}, ${icp.geography}` : `Run ${id.slice(0, 8)}`;
 
   const exportData: ExportData = {
     runLabel,
     leads: allLeads,
-    filtersByLead,
     piecesByLead,
     versionsByPiece,
   };

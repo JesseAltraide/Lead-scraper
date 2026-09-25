@@ -44,7 +44,7 @@ export async function POST(
   const db = serviceClient();
   const { data: piece } = await db
     .from("draft_pieces")
-    .select("id, rewrites_requested, rewrite_in_flight, rewrite_claimed_at")
+    .select("id, rewrites_requested, rewrite_in_flight, rewrite_claimed_at, edits_requested")
     .eq("lead_id", leadId)
     .eq("piece_key", pieceKey)
     .maybeSingle();
@@ -63,6 +63,7 @@ export async function POST(
     rewritesRequested: piece.rewrites_requested,
     rewriteInFlight: piece.rewrite_in_flight,
     rewriteClaimedAt: piece.rewrite_claimed_at,
+    editsRequested: piece.edits_requested,
   }, Date.now());
   if (!allowed.available) {
     return NextResponse.json({ error: allowed.reason }, { status: 409 });

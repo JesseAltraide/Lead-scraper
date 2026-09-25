@@ -3,6 +3,7 @@ import { z } from "zod";
 import { serverClient, serviceClient, requireUser } from "@/lib/supabase-server";
 import { PIECE_KEYS, PIECE_LABELS, type PieceKey } from "@/lib/drafts";
 import { checkEditQuality } from "@/lib/copyQualityCheck";
+import { draftActionAvailability } from "@/lib/draftStates";
 import type { Icp } from "@/lib/icp";
 
 /**
@@ -13,16 +14,20 @@ import type { Icp } from "@/lib/icp";
  * draft can reintroduce weak, generic, or unverifiable copy just as easily as
  * the agent could, so every edit is now judged against the same
  * outbound-copywriting-guide.md checklist the agent's own drafts and every
- * rewrite are held to (checkEditQuality). citation_fact/citation_source_url
- * are still carried forward unchanged — only subject/body/personalization_note
- * are exposed as editable, and this creates a new version (never overwrites),
- * same as an agent-written draft or a rewrite: "every version is kept."
+ * rewrite are held to (checkEditQuality).
+ *
+ * Only `subject`/`body` are editable. `personalization_note`, like
+ * `citation_fact`/`citation_source_url`, is carried forward unchanged: it is
+ * the specific fact tied to the citation check, and a hand-edit could
+ * silently detach it from the source evidence it was verified against
+ * without the checker ever seeing that happen. This creates a new version
+ * (never overwrites), same as an agent-written draft or a rewrite: "every
+ * version is kept."
  */
 
 const bodySchema = z.object({
   subject: z.string().trim().max(300).optional(),
   body: z.string().trim().min(1, "The message can't be empty."),
-  personalization_note: z.string().trim().min(1, "The personalization note can't be empty."),
 });
 
 export async function POST(
@@ -66,7 +71,7 @@ export async function POST(
 
   const { data: piece } = await db
     .from("draft_pieces")
-    .select("id")
+    .select("id, rewrites_requested, rewrite_in_flight, rewrite_claimed_at, edits_requested")
     .eq("lead_id", leadId)
     .eq("piece_key", pieceKey)
     .maybeSingle();
@@ -78,9 +83,25 @@ export async function POST(
     );
   }
 
+  // Checked BEFORE the paid Claude call below, same reason the rewrite route
+  // checks its own cap first: a capped edit should never spend a token.
+  const allowed = draftActionAvailability(
+    "edit",
+    {
+      rewritesRequested: piece.rewrites_requested,
+      rewriteInFlight: piece.rewrite_in_flight,
+      rewriteClaimedAt: piece.rewrite_claimed_at,
+      editsRequested: piece.edits_requested,
+    },
+    Date.now(),
+  );
+  if (!allowed.available) {
+    return NextResponse.json({ error: allowed.reason }, { status: 409 });
+  }
+
   const { data: current } = await db
     .from("draft_versions")
-    .select("citation_source_url, citation_fact")
+    .select("citation_source_url, citation_fact, personalization_note")
     .eq("piece_id", piece.id)
     .eq("is_chosen", true)
     .maybeSingle();
@@ -97,7 +118,7 @@ export async function POST(
     pieceLabel: PIECE_LABELS[pieceKey as PieceKey],
     subject: parsed.data.subject ?? null,
     body: parsed.data.body,
-    personalizationNote: parsed.data.personalization_note,
+    personalizationNote: current.personalization_note,
     citationFact: current.citation_fact,
     citationSourceUrl: current.citation_source_url,
     sourceSummary: lead.source_summary ?? "",
@@ -114,7 +135,7 @@ export async function POST(
     p_piece_key: pieceKey,
     p_subject: parsed.data.subject ?? null,
     p_body: parsed.data.body,
-    p_personalization_note: parsed.data.personalization_note,
+    p_personalization_note: current.personalization_note,
     p_citation_source_url: current.citation_source_url,
     p_citation_fact: current.citation_fact,
     p_origin: "edit",

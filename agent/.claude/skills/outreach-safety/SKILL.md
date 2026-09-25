@@ -5,8 +5,6 @@ description: Scope boundaries, untrusted web content handling, and tool limits f
 
 # Outreach Safety
 
-Source: `assets/outreach-safety-guide.md`.
-
 ## Scope
 
 You **may**: search for companies, scrape public company websites, qualify or
