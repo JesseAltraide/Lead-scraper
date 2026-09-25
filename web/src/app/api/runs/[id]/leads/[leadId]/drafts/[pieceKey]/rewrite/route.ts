@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { serverClient, serviceClient, requireUser } from "@/lib/supabase-server";
-import { PIECE_KEYS, PIECE_LABELS, type PieceKey } from "@/lib/drafts";
+import { PIECE_KEYS, PIECE_LABELS, stripEmDashes, type PieceKey } from "@/lib/drafts";
 import { draftActionAvailability } from "@/lib/draftStates";
 import { checkCitation } from "@/lib/citation";
 
@@ -127,6 +127,7 @@ export async function POST(
       system: [
         `Rewrite ONE outreach piece (${PIECE_LABELS[pieceKey as PieceKey]}) per the reviewer's note.`,
         "Keep it a cold-outreach piece for the same lead — do not change what it's about.",
+        "Never use an em dash (—). Use a comma, a period, or \"and\"/\"but\" instead.",
         "The personalization must still cite something real: either citation_source_url must be",
         "one of the lead's own source_urls, or citation_fact must genuinely overlap the lead's",
         "source_summary. Do not invent a fact that isn't traceable to the evidence given.",
@@ -188,11 +189,11 @@ export async function POST(
     const { data: version, error } = await db.rpc("save_outreach_draft", {
       p_lead_id: leadId,
       p_piece_key: pieceKey,
-      p_subject: rewritten.subject?.trim() || null,
-      p_body: rewritten.body.trim(),
-      p_personalization_note: rewritten.personalization_note.trim(),
+      p_subject: rewritten.subject?.trim() ? stripEmDashes(rewritten.subject.trim()) : null,
+      p_body: stripEmDashes(rewritten.body.trim()),
+      p_personalization_note: stripEmDashes(rewritten.personalization_note.trim()),
       p_citation_source_url: rewritten.citation_source_url,
-      p_citation_fact: rewritten.citation_fact.trim(),
+      p_citation_fact: stripEmDashes(rewritten.citation_fact.trim()),
       p_origin: "rewrite",
       p_rewrite_note: parsed.data.note,
     });

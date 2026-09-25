@@ -148,7 +148,13 @@ export default async function LeadsPage({
           </Link>
           <h1 className="mt-1 text-xl font-semibold tracking-tight">Leads</h1>
         </div>
-        {hasExportableDraft ? <ExportButton runId={id} /> : null}
+        {hasExportableDraft ? (
+          <ExportButton runId={id} />
+        ) : (
+          <span className="text-xs text-[var(--text-muted)]">
+            You won&apos;t be able to export until at least one draft is marked reviewed.
+          </span>
+        )}
       </header>
 
       <Card>

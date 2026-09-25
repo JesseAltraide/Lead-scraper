@@ -4,6 +4,19 @@
  * (supabase/migrations/0001_init.sql, 0002_guards.sql).
  */
 
+/**
+ * No em dashes anywhere the model writes text — house rule for this project,
+ * not just a style preference for code/comments. Mirrors the identical
+ * stripping the agent's own draft-writing path already applies in
+ * `agent/src/normalize.ts`'s `cleanString`; this route and the rewrite route
+ * are a SEPARATE Claude call (the web app's own on-demand drafting for
+ * needs_review leads and rewrites), so they need their own copy rather than
+ * relying on the system prompt alone — an instruction is not a guarantee.
+ */
+export function stripEmDashes(input: string): string {
+  return input.replace(/\s+—\s+/g, ", ").replace(/—/g, " - ");
+}
+
 export const PIECE_KEYS = ["email_1", "email_2", "email_3", "linkedin"] as const;
 export type PieceKey = (typeof PIECE_KEYS)[number];
 
