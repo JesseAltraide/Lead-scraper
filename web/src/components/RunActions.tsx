@@ -73,7 +73,10 @@ export function RunActions({
   payloadFor?: (actionId: string) => unknown;
 }) {
   const router = useRouter();
-  const { stalled, staleSeconds, refreshNow } = useLiveRun({ enabled: live, changeKey });
+  const { stalled, staleSeconds, refreshNow, armRefreshWatchdog } = useLiveRun({
+    enabled: live,
+    changeKey,
+  });
   const [pending, setPending] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -131,6 +134,10 @@ export function RunActions({
             ? String((body as { error: unknown }).error)
             : `That didn't go through (${res.status}).`;
         setError(message);
+      } else {
+        // Only armed on a real success: nothing changed server-side on a
+        // refusal, so there is nothing for a reload to reveal there.
+        armRefreshWatchdog();
       }
       refreshNow();
     } catch {

@@ -224,7 +224,13 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
       <header className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">{spec.headline}</h1>
+            <Link
+              href="/"
+              className="text-xs text-[var(--text-muted)] hover:text-[var(--text)]"
+            >
+              ← Back to home
+            </Link>
+            <h1 className="mt-1 text-xl font-semibold tracking-tight">{spec.headline}</h1>
             <p className="mt-1 max-w-2xl text-sm text-[var(--text-muted)]">{spec.detail}</p>
           </div>
           <Badge tone={spec.tone} live={spec.live}>

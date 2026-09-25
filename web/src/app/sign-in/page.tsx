@@ -131,19 +131,36 @@ export default function SignInPage() {
             </button>
           ) : null}
 
-          <button
-            type="button"
-            className="w-full text-xs text-[var(--text-muted)] underline underline-offset-2"
-            onClick={() => {
-              setMode(mode === "sign-in" ? "sign-up" : "sign-in");
-              setError(null);
-              setNotice(null);
-            }}
-          >
-            {mode === "sign-in"
-              ? "No account yet? Create one"
-              : "Already have an account? Sign in"}
-          </button>
+          {/* "forgot" had no way back to sign-in except reloading the page —
+              the toggle below only ever switched between sign-in and sign-up,
+              never out of forgot mode. */}
+          {mode === "forgot" ? (
+            <button
+              type="button"
+              className="w-full text-xs text-[var(--text-muted)] underline underline-offset-2"
+              onClick={() => {
+                setMode("sign-in");
+                setError(null);
+                setNotice(null);
+              }}
+            >
+              ← Back to sign in
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="w-full text-xs text-[var(--text-muted)] underline underline-offset-2"
+              onClick={() => {
+                setMode(mode === "sign-in" ? "sign-up" : "sign-in");
+                setError(null);
+                setNotice(null);
+              }}
+            >
+              {mode === "sign-in"
+                ? "No account yet? Create one"
+                : "Already have an account? Sign in"}
+            </button>
+          )}
         </form>
       </Card>
     </main>

@@ -14,21 +14,24 @@ import { runClarityCheck } from "@/lib/clarityCheck";
 
 /**
  * Starting limits. Was deliberately tiny (4 companies / 3 reads) to check
- * real cost before scaling; reverted back to 30/20 now that the actor and
- * the cost per run are both confirmed.
+ * real cost before scaling, then set to 30/20 once the actor and per-run cost
+ * were both confirmed. Scaled back down again for faster demos (10
+ * candidates / 7 scrapes) — same reasoning as the original tiny values, just
+ * a different purpose: a full run should finish in well under a minute of
+ * wall clock instead of several minutes.
  *
  * max_tool_calls is not a round number, it is derived from what a full run at
  * these limits actually needs, because a cap below that halts the agent
  * mid-run and reports a partial result for no reason but arithmetic:
- *   ~3 discover + ~3 screen + 20 scrapes + 20 qualifications
- *   + 4 draft pieces x up to 10 qualified leads (40) + quality + finish ~= 90.
- * 120 leaves headroom for refusals and retries without being unbounded.
+ *   ~3 discover + ~3 screen + 7 scrapes + 7 qualifications
+ *   + 4 draft pieces x up to 7 qualified leads (28) + quality + finish ~= 43.
+ * 60 leaves headroom for refusals and retries without being unbounded.
  */
 const STARTING_LIMITS = {
-  max_candidates: 30,
-  max_scrapes: 20,
-  max_agent_turns: 150,
-  max_tool_calls: 120,
+  max_candidates: 10,
+  max_scrapes: 7,
+  max_agent_turns: 60,
+  max_tool_calls: 60,
 };
 
 export async function POST(request: Request) {
