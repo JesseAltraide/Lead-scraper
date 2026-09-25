@@ -43,13 +43,15 @@ export const env = {
 
   workerId: `agent-${process.pid}`,
 
-  // Milestone emails (drafts ready, search finished). Gmail SMTP requires an
-  // App Password, not the account password — 2FA blocks plain-password SMTP
-  // by default. Generate one at myaccount.google.com/apppasswords. Null
-  // (not configured) means notify.ts silently skips sending rather than
-  // failing the run — a notification failing must never block real work.
-  smtpUser: optional("SMTP_USER"),
-  smtpPass: optional("SMTP_PASS"),
+  // Milestone emails (drafts ready, search finished) are no longer sent
+  // directly from this process — Render's outbound network could not reach
+  // Gmail's SMTP servers at all (confirmed via Render's own logs). notify.ts
+  // now POSTs the send request to the web app's own /api/internal/notify
+  // instead, authenticated with sharedSecret (the same token already used
+  // for web -> agent calls, reused here for the reverse direction). Null
+  // (not configured) means notify.ts silently skips, same fail-soft posture
+  // as before — a notification failing must never block real work.
+  webAppUrl: optional("WEB_APP_URL"),
 };
 
 export const liveDiscovery = env.apifyLive && Boolean(env.apifyToken && env.apifyActorId);

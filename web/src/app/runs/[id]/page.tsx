@@ -167,16 +167,26 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
     ["scraped", "scrape_failed", "qualified_done"].includes(c.stage),
   );
   const hasQualified = allLeads.length > 0;
-  const { count: draftPieceCount } = hasQualified
+  // lead_id (not just a head:true count) so drafting progress can be shown
+  // per-lead below, not just as one undifferentiated total — a run that
+  // finished 3 leads completely reads very differently from one that wrote
+  // one piece each across 12 leads, even though both could total 12 pieces.
+  const { data: draftPieceRows } = qualified.length
     ? await supabase
         .from("draft_pieces")
-        .select("id", { count: "exact", head: true })
+        .select("lead_id")
         .in(
           "lead_id",
-          allLeads.map((l) => l.id),
+          qualified.map((l) => l.id),
         )
-    : { count: 0 };
-  const hasDrafted = (draftPieceCount ?? 0) > 0;
+    : { data: [] as { lead_id: string }[] };
+  const piecesByLeadCount = new Map<string, number>();
+  for (const p of draftPieceRows ?? []) {
+    piecesByLeadCount.set(p.lead_id, (piecesByLeadCount.get(p.lead_id) ?? 0) + 1);
+  }
+  const draftPieceCount = draftPieceRows?.length ?? 0;
+  const leadsFullyDrafted = [...piecesByLeadCount.values()].filter((n) => n >= 4).length;
+  const hasDrafted = draftPieceCount > 0;
 
   // What this run actually CONTAINS, which decides what is possible alongside
   // its status. A run cancelled during the clarifying questions has no ICP, so
@@ -198,7 +208,7 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
     hasScreened,
     hasScraped,
     hasQualified,
-    hasDrafted,
+    draftPieceCount,
   ].join("|");
 
   // wrapTool (agent/src/logging.ts) sets active_tool to the tool name for the
@@ -311,6 +321,9 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
         hasScraped={hasScraped}
         hasQualified={hasQualified}
         hasDrafted={hasDrafted}
+        draftsProgress={
+          qualified.length > 0 ? { leadsDone: leadsFullyDrafted, leadsTotal: qualified.length } : null
+        }
       />
 
       {/* --- ICP (Phase 7: shown at every status once it exists, not only at

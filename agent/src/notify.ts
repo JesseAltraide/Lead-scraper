@@ -1,5 +1,3 @@
-import nodemailer from "nodemailer";
-import { db } from "./db.js";
 import { env } from "./env.js";
 
 /**
@@ -11,69 +9,36 @@ import { env } from "./env.js";
  * pieces. "Search finished" is anchored to the run actually leaving
  * `researching` — completed, completed_partial, or failed.
  *
+ * The actual SMTP send happens on the WEB app now (web/src/app/api/internal/
+ * notify/route.ts), not here — Render's outbound network could not reach
+ * Gmail's SMTP servers at all (confirmed via Render's own logs: ETIMEDOUT,
+ * then ENETUNREACH on an IPv6 address, before ever reaching authentication).
+ * This function's job is only to decide WHEN to notify — that trigger stays
+ * here, tied to the run's own lifecycle, never to whether anyone has a
+ * browser tab open — and to hand the actual dispatch to web over the same
+ * HTTPS connection the agent already uses to reach it.
+ *
  * Fails soft, always: a milestone email is a courtesy, not a guarantee the
  * product depends on. A run must never fail, stall, or even log at error
- * level because Gmail was unreachable or SMTP_USER was never set.
+ * level because the web app was unreachable or WEB_APP_URL was never set.
  */
-
-let transporter: ReturnType<typeof nodemailer.createTransport> | null = null;
-
-function getTransporter() {
-  if (!env.smtpUser || !env.smtpPass) return null;
-  if (!transporter) {
-    transporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 587,
-      secure: false,
-      auth: { user: env.smtpUser, pass: env.smtpPass },
-    });
-  }
-  return transporter;
-}
-
-async function recipientFor(runId: string): Promise<string | null> {
-  const { data: run } = await db.from("runs").select("user_id").eq("id", runId).maybeSingle();
-  if (!run) return null;
-  const { data, error } = await db.auth.admin.getUserById(run.user_id);
-  if (error || !data.user?.email) return null;
-  return data.user.email;
-}
-
-/**
- * Both milestones are one-shot per run: this checks run_events for a marker
- * of the same kind before sending, and writes one right after — so a tool the
- * agent can legitimately call more than once (check_list_quality, if it
- * re-checks after finding an issue) or a resumed run re-entering the same
- * code path cannot send the same email twice.
- */
-async function alreadySent(runId: string, marker: string): Promise<boolean> {
-  const { count } = await db
-    .from("run_events")
-    .select("id", { count: "exact", head: true })
-    .eq("run_id", runId)
-    .eq("kind", "note")
-    .eq("reason", marker);
-  return (count ?? 0) > 0;
-}
 
 async function send(runId: string, marker: string, subject: string, text: string): Promise<void> {
+  if (!env.webAppUrl) return; // not configured — silently skip, same posture as fixture mode
+
   try {
-    const t = getTransporter();
-    if (!t) return; // not configured — silently skip, same posture as fixture mode
-
-    if (await alreadySent(runId, marker)) return;
-
-    const to = await recipientFor(runId);
-    if (!to) return;
-
-    await t.sendMail({ from: env.smtpUser!, to, subject, text });
-
-    // Written AFTER a successful send, as the marker itself — if sending
-    // throws, nothing is recorded and a later retry can send it for real.
-    await db.from("run_events").insert({ run_id: runId, kind: "note", reason: marker });
+    const res = await fetch(`${env.webAppUrl}/api/internal/notify`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${env.sharedSecret}` },
+      body: JSON.stringify({ runId, marker, subject, text }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      console.error(`[notify] web app refused the send for run ${runId}: ${res.status}`);
+    }
   } catch (err) {
     // A notification failing is never allowed to fail the run it describes.
-    console.error(`[notify] failed to send for run ${runId}:`, err);
+    console.error(`[notify] failed to reach web app for run ${runId}:`, err);
   }
 }
 

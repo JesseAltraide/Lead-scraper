@@ -50,6 +50,7 @@ export function StageTracker({
   hasScraped,
   hasQualified,
   hasDrafted,
+  draftsProgress,
 }: {
   status: RunStatus;
   activeTool: string | null;
@@ -58,6 +59,16 @@ export function StageTracker({
   hasScraped: boolean;
   hasQualified: boolean;
   hasDrafted: boolean;
+  /**
+   * How many qualified leads have all four outreach pieces written, out of
+   * how many qualified leads exist right now. Leads aren't visible for
+   * review until the run itself finishes (the "researching" status offers no
+   * "See the leads" action at all — see runStates.ts), so without this the
+   * whole drafting stage was a single dot with no sense of progress through
+   * what can be the longest step (up to 4 Claude calls per qualified lead).
+   * null when there is nothing qualified yet to draft for.
+   */
+  draftsProgress: { leadsDone: number; leadsTotal: number } | null;
 }) {
   if (status !== "researching") return null;
 
@@ -70,7 +81,9 @@ export function StageTracker({
           reader needs an explicit announcement when the stage changes,
           the whole point of this component is to say what's happening. */}
       <span className="sr-only" role="status" aria-live="polite">
-        {activeLabel ?? "Working"}
+        {active === "drafting" && draftsProgress
+          ? `${activeLabel}: ${draftsProgress.leadsDone} of ${draftsProgress.leadsTotal} leads done`
+          : (activeLabel ?? "Working")}
       </span>
       {/* Visual-only from here down — the sr-only status span above is what
           assistive tech actually hears, so this whole row is hidden from it
@@ -89,6 +102,9 @@ export function StageTracker({
                 style={{ color: isActive ? "var(--text)" : "var(--text-faint)" }}
               >
                 {stage.label}
+                {stage.key === "drafting" && draftsProgress
+                  ? ` (${draftsProgress.leadsDone} of ${draftsProgress.leadsTotal})`
+                  : null}
               </span>
             </div>
             {i < STAGE_ORDER.length - 1 ? (
