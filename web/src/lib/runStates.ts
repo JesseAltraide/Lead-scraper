@@ -180,7 +180,8 @@ export const RUN_STATES: Record<RunStatus, RunStateSpec> = {
         label: "Stop",
         tone: "danger",
         endpoint: "stop",
-        confirm: "Stop here? Everything found so far is kept, and you can carry on later.",
+        confirm:
+          "Stop here? Everything found so far is kept, and you can carry on later. Picking back up isn't instant: Claude has to re-read everything already done before it can safely continue, which can take a minute or two, especially the more this run has already found.",
       },
     ],
   },
@@ -215,6 +216,8 @@ export const RUN_STATES: Record<RunStatus, RunStateSpec> = {
         label: "Continue from where it stopped",
         tone: "primary",
         endpoint: "retry",
+        confirm:
+          "Continue from where it stopped? Claude re-reads everything already found before it resumes, to make sure nothing gets missed or redone — that check can take a minute or two before you see new activity, which is expected, not stuck.",
       },
       // Distinct from the above: this one RAISES the limits, for when the
       // run stopped because it genuinely ran out of budget, not because the
@@ -225,7 +228,7 @@ export const RUN_STATES: Record<RunStatus, RunStateSpec> = {
         tone: "quiet",
         endpoint: "continue",
         confirm:
-          "This raises the limits and carries on from where it stopped. Companies already researched won't be paid for again.",
+          "This raises the limits and carries on from where it stopped. Companies already researched won't be paid for again. Same as Continue: Claude re-reads everything already found before resuming, so expect a minute or two of quiet before new activity shows up.",
       },
       START_NEW,
     ],

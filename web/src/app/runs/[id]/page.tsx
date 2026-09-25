@@ -32,7 +32,16 @@ const STAGE_LABEL: Record<string, { text: string; tone: string }> = {
   scraping: { text: "Reading website…", tone: "working" },
   scraped: { text: "Website read", tone: "working" },
   scrape_failed: { text: "Website couldn't be read", tone: "partial" },
-  qualified_done: { text: "Qualified", tone: "done" },
+  // Genuinely confusing bug, not a display quirk: `qualified_done` is set the
+  // moment a lead record exists for this candidate (see 0001_init.sql's own
+  // comment on the enum value) — completely independent of what that lead's
+  // actual VERDICT was. Labelling it "Qualified" made every screened-in
+  // candidate show a green "Qualified" badge here regardless of whether the
+  // real leads page (which reads the true verdict from leads.status) later
+  // marked it qualified, not_qualified, or needs_review. This list only ever
+  // tracks PROCESS stage, never outcome — the real verdict lives on the
+  // leads page, so the label here says exactly that instead of guessing.
+  qualified_done: { text: "Reviewed — see leads for verdict", tone: "neutral" },
 };
 
 export default async function RunPage({ params }: { params: Promise<{ id: string }> }) {
@@ -212,22 +221,31 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
   ].join("|");
 
   // wrapTool (agent/src/logging.ts) sets active_tool to the tool name for the
-  // duration of each call and clears it after. Read live off the same run
-  // row this page already polls, no separate signal needed.
-  const isReadingWebsite = status === "researching" && run.active_tool === "scrape_website";
-  // Same reasoning as scraping: discover_companies already claims budget and
-  // calls Apify before this page ever sees it as "in flight", so a stop that
-  // took effect immediately would still let a few more candidates land a
-  // moment later (the in-flight search finishing on its own, which is
-  // correct, that spend is already committed) with no warning that more was
-  // coming. Blocking Stop until it finishes makes the two cases consistent
-  // instead of scraping being the only one explained up front.
-  const isSearching = status === "researching" && run.active_tool === "discover_companies";
-  const blocked = isReadingWebsite
-    ? { stop_run: "A website is being read right now. Stop will apply as soon as this finishes." }
-    : isSearching
-      ? { stop_run: "Companies are being searched for right now. Stop will apply as soon as this finishes." }
-      : {};
+  // duration of each call and clears it after. Read live off the same run row
+  // this page already polls, no separate signal needed.
+  //
+  // Originally only covered scrape_website/discover_companies — extended to
+  // every tool that actually writes something, per explicit user request:
+  // clicking Stop mid-qualification or mid-drafting still let that one call
+  // finish (same reasoning as scraping/searching: the budget claim already
+  // happened, so letting it land is correct), but nothing explained why Stop
+  // hadn't visibly applied yet, which read as broken rather than as the same
+  // "finishing what's already committed" behavior already explained for the
+  // other two. check_list_quality is read-only (nothing to let finish) and
+  // deliberately excluded — blocking Stop for it would just be a false wait
+  // with nothing actually at stake.
+  const ACTIVE_TOOL_LABEL: Record<string, string> = {
+    discover_companies: "Companies are being searched for",
+    screen_candidates: "Candidates are being screened",
+    scrape_website: "A website is being read",
+    save_lead_qualification: "A lead is being qualified",
+    save_outreach_draft: "An outreach draft is being written",
+  };
+  const activeToolLabel =
+    status === "researching" && run.active_tool ? ACTIVE_TOOL_LABEL[run.active_tool] : undefined;
+  const blocked = activeToolLabel
+    ? { stop_run: `${activeToolLabel} right now. Stop will apply as soon as this finishes.` }
+    : {};
 
   return (
     <main className="mx-auto max-w-4xl space-y-5 px-5 py-10">

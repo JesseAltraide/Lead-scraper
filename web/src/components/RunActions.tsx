@@ -85,12 +85,26 @@ export function RunActions({
   // open, never on a fresh page load of a run that was already finished. That
   // keeps "back to run" from the leads page from immediately bouncing the
   // user right back there.
+  //
+  // Fired with a short delay, not instantly: a real crash was reported right
+  // at this exact transition — the leads page failed to load, a manual
+  // reload of the SAME url failed the same way, but navigating back and
+  // clicking "See the leads" again a few seconds later worked. A plain
+  // client-side timing issue wouldn't explain the reload also failing (a
+  // reload is a fresh server request, no stale client cache involved, this
+  // page is force-dynamic) — the shape of the evidence (fails immediately,
+  // works moments later) points at the last write(s) from finishing drafts
+  // not having fully settled yet at the exact instant this fires. Waiting
+  // briefly before the FIRST navigation gives that a window to land, closing
+  // the most likely version of the race without needing the actual server
+  // error text to pin down definitively.
   const wasLive = useRef(live);
   useEffect(() => {
-    if (wasLive.current && !live && ctx.hasLeads && DRAFTS_READY.includes(status)) {
-      router.push(`/runs/${runId}/leads`);
-    }
+    const shouldRedirect = wasLive.current && !live && ctx.hasLeads && DRAFTS_READY.includes(status);
     wasLive.current = live;
+    if (!shouldRedirect) return;
+    const timer = setTimeout(() => router.push(`/runs/${runId}/leads`), 2_000);
+    return () => clearTimeout(timer);
   }, [live, status, ctx.hasLeads, router, runId]);
 
   const actions = actionsFor(status, ctx);
