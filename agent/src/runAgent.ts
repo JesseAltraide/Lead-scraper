@@ -269,6 +269,13 @@ export async function runAgent(
   // real backstop against concurrent writes; this poll just stops the whole
   // loop promptly once superseded, instead of limping to the next refusal.
   const abortController = new AbortController();
+  // Distinguishes WHY the controller was aborted, since the catch block below
+  // must treat a user-requested stop (read back whatever status stop_run
+  // already wrote) completely differently from a genuine hang (land on
+  // `failed` with a real reason, not pretend it was a stop). Both watchers
+  // below set this immediately before calling abort().
+  let abortReason: "stopped" | "hung" | null = null;
+
   const stopWatcher = setInterval(() => {
     void (async () => {
       try {
@@ -278,6 +285,7 @@ export async function runAgent(
           .eq("id", runId)
           .single();
         if (data && (data.status !== "researching" || data.claim_generation !== myGeneration)) {
+          abortReason = "stopped";
           abortController.abort();
         }
       } catch {
@@ -285,6 +293,21 @@ export async function runAgent(
       }
     })();
   }, 5_000);
+
+  // A ceiling on genuine stalls, not on legitimate slow turns. The heartbeat
+  // above proves the Node PROCESS is alive; it says nothing about whether the
+  // specific Claude request currently in flight is making progress — those
+  // are independent. A real turn over a large candidate batch has been
+  // observed taking ~140s; HANG_TIMEOUT_MS gives roughly 2x that margin
+  // before treating silence as a genuine stall rather than reasoning time.
+  const HANG_TIMEOUT_MS = 5 * 60_000;
+  let lastMessageAt = Date.now();
+  const hangWatcher = setInterval(() => {
+    if (Date.now() - lastMessageAt > HANG_TIMEOUT_MS) {
+      abortReason = "hung";
+      abortController.abort();
+    }
+  }, 15_000);
 
   let turns = 0;
   let costUsd: number | null = null;
@@ -348,6 +371,7 @@ export async function runAgent(
     });
 
     for await (const message of response) {
+      lastMessageAt = Date.now();
       if (message.type === "assistant") turns += 1;
       if (message.type === "result") {
         costUsd = "total_cost_usd" in message ? (message.total_cost_usd as number) : null;
@@ -398,7 +422,7 @@ export async function runAgent(
     if (final?.status) await notifySearchFinished(runId, final.status);
     return { status: final?.status ?? "unknown", turns, costUsd };
   } catch (err) {
-    if (abortController.signal.aborted) {
+    if (abortReason === "stopped") {
       // Deliberate: the stop watcher above already moved the row to
       // completed_partial before triggering this abort. Landing here in
       // `fail_run` would overwrite that with the wrong status and the wrong
@@ -407,6 +431,21 @@ export async function runAgent(
       // already handle. Read back whatever status is actually there instead.
       const { data: stopped } = await db.from("runs").select("status").eq("id", runId).single();
       return { status: stopped?.status ?? "completed_partial", turns, costUsd };
+    }
+
+    if (abortReason === "hung") {
+      // Unlike a stop, nothing else has already written a real outcome here —
+      // this needs its own honest failure, not a silent reuse of whatever
+      // status happens to be on the row (still `researching`, which would be
+      // actively misleading: nothing is actually running any more).
+      const minutes = Math.round(HANG_TIMEOUT_MS / 60_000);
+      await rpc("fail_run", {
+        p_run_id: runId,
+        p_step: "agent_loop",
+        p_reason: `No response from Claude for over ${minutes} minutes — the request appears to have stalled rather than genuinely still working. Retry resumes from everything already found.`,
+      }).catch(() => {});
+      await notifySearchFinished(runId, "failed");
+      return { status: "failed", turns, costUsd };
     }
 
     const g = asGuardError(err);
@@ -425,5 +464,6 @@ export async function runAgent(
   } finally {
     clearInterval(heartbeat);
     clearInterval(stopWatcher);
+    clearInterval(hangWatcher);
   }
 }

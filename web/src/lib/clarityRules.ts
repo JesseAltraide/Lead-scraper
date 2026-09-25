@@ -24,6 +24,14 @@ export const CLARIFIABLE_FIELDS = [
   "mustHave",
   "niceToHave",
   "skipIf",
+  // The intake form's free-text "Anything else" field. Missing here meant a
+  // real contradiction naming this field (e.g. Geography "United States"
+  // with a note saying "based in Germany") still got correctly detected by
+  // the model, but parseFindings' isClarifiableField filter silently dropped
+  // "notes" out of the blocker's `fields` array before it ever reached the
+  // UI — leaving only the OTHER field editable, with no way to resolve the
+  // blocker by fixing the side that was actually wrong.
+  "notes",
 ] as const;
 
 export type ClarifiableField = (typeof CLARIFIABLE_FIELDS)[number];

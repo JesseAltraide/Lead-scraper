@@ -32,10 +32,12 @@ const FIELD_LABELS: Record<string, string> = {
   mustHave: "Must have",
   niceToHave: "Nice to have",
   skipIf: "Skip if",
+  notes: "Anything else",
 };
 
 const NUMERIC = new Set(["minEmployees", "maxEmployees"]);
 const LIST = new Set(["mustHave", "niceToHave", "skipIf"]);
+const TEXTAREA = new Set(["businessProblem", "notes"]);
 
 function sameValue(a: unknown, b: unknown): boolean {
   const norm = (v: unknown) =>
@@ -206,7 +208,7 @@ function FieldEditor({
             )
           }
         />
-      ) : field === "businessProblem" ? (
+      ) : TEXTAREA.has(field) ? (
         <textarea
           className={`${inputClass} min-h-20`}
           value={String(value ?? "")}

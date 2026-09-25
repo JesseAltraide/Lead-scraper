@@ -229,6 +229,20 @@ export function RunActions({
           own interval) resets a run stuck past 5 minutes with no heartbeat to
           `failed`, at which point this message disappears on its own because
           the run is no longer live. */}
+      {/* The gap between one tool call finishing and the next one starting is
+          real Claude reasoning time, not a stall — measured up to ~140s on a
+          single screening/qualifying turn over a full candidate batch. Shown
+          BEFORE the stalled banner (30s+) specifically so a quiet-but-normal
+          gap reads as "still working" rather than looking identical to a
+          real problem — this was the direct cause of repeated premature
+          Stop clicks during a still-healthy run. */}
+      {live && !stalled && staleSeconds > 8 ? (
+        <p className="text-xs text-[var(--text-muted)]">
+          Thinking about the next step — this can take a minute or two, especially right after
+          several candidates were just discovered or scraped.
+        </p>
+      ) : null}
+
       {stalled ? (
         <p className="text-xs text-[var(--text-muted)]">
           No update for {staleSeconds}s. The run may just be slow, nothing here is lost either way.
