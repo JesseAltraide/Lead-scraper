@@ -572,8 +572,8 @@ const finishRunImpl = wrapTool(
 // MCP server exposing the tools to the Agent SDK
 // ---------------------------------------------------------------------------
 
-export function buildToolServer(runId: string) {
-  const ctx: ToolContext = { runId };
+export function buildToolServer(runId: string, generation: number) {
+  const ctx: ToolContext = { runId, generation };
   const asText = (v: unknown) => ({
     content: [{ type: "text" as const, text: renderToolResult(v as never) }],
   });

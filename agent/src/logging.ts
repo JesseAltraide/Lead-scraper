@@ -13,7 +13,7 @@ import { summarize } from "./normalize.js";
 
 export type ToolResult = { ok: true; data: unknown } | { ok: false; code: string; message: string };
 
-export type ToolContext = { runId: string };
+export type ToolContext = { runId: string; generation: number };
 
 async function log(
   runId: string,
@@ -43,9 +43,21 @@ async function log(
  * Claims one unit of the run's tool-call budget. Conditional update: the check
  * and the increment are the same statement, so concurrent calls cannot both
  * see the last remaining slot.
+ *
+ * generation is the fencing token this process was handed at claim time
+ * (see claim_generation, migration 0020). Passing it here is what makes a
+ * superseded process (one whose run was reclaimed by a newer runAgent()
+ * call after Stop-then-quick-Retry) fail on its very next tool call, instead
+ * of continuing to write against a run it no longer actually owns.
  */
-async function claimToolCallBudget(runId: string): Promise<{ used: number; cap: number } | null> {
-  const { data, error } = await db.rpc("claim_tool_call_budget", { p_run_id: runId });
+async function claimToolCallBudget(
+  runId: string,
+  generation: number,
+): Promise<{ used: number; cap: number } | null> {
+  const { data, error } = await db.rpc("claim_tool_call_budget", {
+    p_run_id: runId,
+    p_generation: generation,
+  });
   if (error) throw asGuardError(error);
   return data as { used: number; cap: number } | null;
 }
@@ -59,7 +71,7 @@ export function wrapTool<Args>(
     const startedAt = Date.now();
 
     try {
-      await claimToolCallBudget(ctx.runId);
+      await claimToolCallBudget(ctx.runId, ctx.generation);
     } catch (err) {
       const g = asGuardError(err);
       await log(ctx.runId, toolName, purpose, args, "refused", null, g.message, Date.now() - startedAt);

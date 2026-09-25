@@ -222,11 +222,17 @@ export async function runAgent(
     await rpc("claim_run_for_research", { p_run_id: runId, p_worker: env.workerId });
   }
 
+  // Read AFTER the claim above (or the caller's own prior claim, for
+  // alreadyClaimed) so this is always the generation THIS process actually
+  // holds — the fencing token that lets claim_tool_call_budget (migration
+  // 0020) tell this process apart from a later one that reclaims the same
+  // run after a Stop-then-quick-Retry race.
   const { data: run } = await db
     .from("runs")
-    .select("max_agent_turns")
+    .select("max_agent_turns, claim_generation")
     .eq("id", runId)
     .single();
+  const myGeneration = run?.claim_generation ?? 0;
 
   // Recorded on the run itself, not only in the server log: a reviewer looking
   // at "30 companies" has no way to tell whether those came from a real paid
@@ -241,6 +247,44 @@ export async function runAgent(
   const heartbeat = setInterval(() => {
     void rpc("run_heartbeat", { p_run_id: runId }).catch(() => {});
   }, 20_000);
+
+  // stop_run (web/src/app/api/runs/[id]/[action]/route.ts) only ever updates
+  // the DB row to completed_partial — it has no way to reach into this
+  // process. Without this poll, clicking Stop looked instant on screen but
+  // the agent kept running for real underneath (still calling Apify,
+  // burning turns) until it happened to finish on its own; any writes it made
+  // after that point were silently dropped by the same conditional
+  // `.eq("status", "researching")` guards everywhere else in this file, so
+  // the work was wasted, not just invisible. Polling every 5s and aborting
+  // the SDK query is the only way to actually stop the in-flight call.
+  //
+  // Checking status alone isn't enough: if the user clicks "Continue from
+  // where it stopped" quickly enough, a SECOND runAgent() call reclaims this
+  // run and puts status back to 'researching' before this process's next
+  // poll — which would then wrongly read "still researching, nothing
+  // changed" and keep going. Comparing claim_generation catches that case:
+  // a reclaim always bumps it, so this process notices it's been superseded
+  // even though the status column cycled back to looking normal. The
+  // per-tool-call check in claim_tool_call_budget (migration 0020) is the
+  // real backstop against concurrent writes; this poll just stops the whole
+  // loop promptly once superseded, instead of limping to the next refusal.
+  const abortController = new AbortController();
+  const stopWatcher = setInterval(() => {
+    void (async () => {
+      try {
+        const { data } = await db
+          .from("runs")
+          .select("status, claim_generation")
+          .eq("id", runId)
+          .single();
+        if (data && (data.status !== "researching" || data.claim_generation !== myGeneration)) {
+          abortController.abort();
+        }
+      } catch {
+        // Best-effort — a failed poll just waits for the next tick.
+      }
+    })();
+  }, 5_000);
 
   let turns = 0;
   let costUsd: number | null = null;
@@ -258,6 +302,7 @@ export async function runAgent(
     const response = query({
       prompt,
       options: {
+        abortController,
         model: "claude-sonnet-5",
         cwd: projectRoot,
         maxTurns: run?.max_agent_turns ?? 30,
@@ -270,7 +315,7 @@ export async function runAgent(
           "lead-list-quality",
           "outreach-safety",
         ],
-        mcpServers: { "lead-research": buildToolServer(runId) },
+        mcpServers: { "lead-research": buildToolServer(runId, myGeneration) },
         // Only our own tools. No file access, no shell, no web fetch — so there
         // is no route to an arbitrary URL and nothing to leak a secret into.
         allowedTools: [
@@ -353,6 +398,17 @@ export async function runAgent(
     if (final?.status) await notifySearchFinished(runId, final.status);
     return { status: final?.status ?? "unknown", turns, costUsd };
   } catch (err) {
+    if (abortController.signal.aborted) {
+      // Deliberate: the stop watcher above already moved the row to
+      // completed_partial before triggering this abort. Landing here in
+      // `fail_run` would overwrite that with the wrong status and the wrong
+      // story (a "failure" the user actually asked for), and there is
+      // nothing left for a Retry action to recover from that stop_run didn't
+      // already handle. Read back whatever status is actually there instead.
+      const { data: stopped } = await db.from("runs").select("status").eq("id", runId).single();
+      return { status: stopped?.status ?? "completed_partial", turns, costUsd };
+    }
+
     const g = asGuardError(err);
     // Land in `failed` with the specific step and reason. The UI reads this
     // event, and `failed` has a Retry that resumes. The reason's first
@@ -368,5 +424,6 @@ export async function runAgent(
     return { status: "failed", turns, costUsd };
   } finally {
     clearInterval(heartbeat);
+    clearInterval(stopWatcher);
   }
 }
