@@ -1,50 +1,36 @@
 /**
- * Geography has to be somewhere real.
+ * Geography has to be somewhere real — AND somewhere the actual search
+ * actor's location field recognizes, which is a narrower thing.
+ *
+ * This used to also accept "regions" — Worldwide, continents, and political/
+ * economic groupings like DACH, GCC, Benelux, the EU. Removed entirely after
+ * a real run confirmed "European Union" isn't a place LinkedIn's own
+ * location search recognizes at all: the actor returned a hard 404 and every
+ * candidate for the run was lost. Tracing the actor's error handling showed
+ * the failure mode is worse than a thrown error — it CATCHES the bad
+ * location internally and still returns 200 with an empty dataset, so it's
+ * indistinguishable from a genuine "searched and found nothing" result.
+ * "European Union" was the one confirmed broken, but every other REGIONS
+ * entry was the same *kind* of value (a constructed grouping, not a real
+ * administrative place) with the same unverified risk, and there is no
+ * public taxonomy of valid LinkedIn locations to check them against the way
+ * industries.ts could (LinkedIn's location list is enormous and resolved
+ * live via autocomplete, not published as a static file). Countries are the
+ * one category that's actually certain: every real country has a genuine
+ * LinkedIn location entity. Restricting to that is what "only what the
+ * scraper can actually search" means in practice.
  *
  * This is a free, instant, certain check — no AI call needed to know that
  * "nowhere" is not a place. It also does a second job: the geography goes to
  * the company search as a filter, so a canonical spelling ("United States",
  * not "usa" or "U.S.") makes the search itself more reliable.
  *
- * Scope is deliberately country-or-region, matching what a company database
- * can actually filter on. Anything finer — a state, a city, a metro area —
- * belongs in Must have ("Headquartered in Texas"), where it is checked against
- * evidence rather than guessed at by a search filter.
+ * Scope is deliberately country-only, not "country or region" — anything
+ * finer (a state, a city) OR broader (a continent, a bloc) belongs in Must
+ * have ("Headquartered in Texas", "Operates across Europe"), where it is
+ * checked against evidence rather than guessed at by an unverified search
+ * filter value.
  */
-
-/** Multi-country regions people genuinely run campaigns against. */
-const REGIONS = [
-  "Worldwide",
-  "Africa",
-  "Asia",
-  "Asia-Pacific",
-  "Australia and New Zealand",
-  "Benelux",
-  "Caribbean",
-  "Central America",
-  "DACH",
-  "East Africa",
-  "Eastern Europe",
-  "Europe",
-  "European Union",
-  "GCC",
-  "Latin America",
-  "MENA",
-  "Middle East",
-  "Nordics",
-  "North America",
-  "Northern Europe",
-  "Oceania",
-  "Scandinavia",
-  "South America",
-  "South Asia",
-  "Southeast Asia",
-  "Southern Africa",
-  "Southern Europe",
-  "Sub-Saharan Africa",
-  "West Africa",
-  "Western Europe",
-];
 
 const COUNTRIES = [
   "Afghanistan", "Albania", "Algeria", "Andorra", "Angola", "Antigua and Barbuda", "Argentina",
@@ -115,25 +101,16 @@ const ALIASES: Record<string, string> = {
   "cabo verde": "Cape Verde",
   "east timor": "Timor-Leste",
   "vatican": "Vatican City",
-  "apac": "Asia-Pacific",
-  "asia pacific": "Asia-Pacific",
-  "emea": "Europe",
-  "eu": "European Union",
-  "latam": "Latin America",
-  "anz": "Australia and New Zealand",
-  "scandinavia": "Scandinavia",
-  "nordic": "Nordics",
-  "nordic countries": "Nordics",
-  "gulf": "GCC",
-  "global": "Worldwide",
-  "international": "Worldwide",
-  "anywhere": "Worldwide",
-  "worldwide": "Worldwide",
+  // No substitute offered for apac/emea/eu/european union/latam/anz/
+  // scandinavia/nordic/gulf/global/worldwide etc. — those used to alias to
+  // REGIONS entries that are gone now (see the file header). There is no
+  // single real country that means the same thing as "Europe" or
+  // "Worldwide" once regions are off the table, so these now correctly fall
+  // through to "not a known place" rather than silently resolving to one
+  // arbitrary country that only partly matches what was actually meant.
 };
 
-export const KNOWN_PLACES: string[] = [...COUNTRIES, ...REGIONS].sort((a, b) =>
-  a.localeCompare(b),
-);
+export const KNOWN_PLACES: string[] = [...COUNTRIES].sort((a, b) => a.localeCompare(b));
 
 const LOOKUP = new Map<string, string>();
 for (const place of KNOWN_PLACES) LOOKUP.set(place.toLowerCase(), place);

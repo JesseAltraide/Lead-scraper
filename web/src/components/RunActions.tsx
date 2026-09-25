@@ -10,7 +10,16 @@ import { useLiveRun } from "./useLiveRun";
 // drafts) lives entirely on the leads page now, so rather than leave the user
 // looking at that confusing in-between state, follow the run there
 // automatically the moment it finishes with something to show.
-const DRAFTS_READY: RunStatus[] = ["completed", "completed_partial"];
+//
+// Deliberately NOT completed_partial: that status now offers real actions
+// right here on this page ("Continue from where it stopped", "Keep
+// searching") — added after this redirect was first written. Auto-navigating
+// away the instant a manual Stop lands on completed_partial would whisk the
+// user past the exact button they clicked Stop to get to, toward a review
+// screen they may not have wanted yet. `completed` has no such action (only
+// Review/Start new), so redirecting there still avoids a dead-looking screen
+// with nothing to do.
+const DRAFTS_READY: RunStatus[] = ["completed"];
 
 /**
  * Renders the action buttons for a run.

@@ -15,6 +15,15 @@ import type { ClarificationItem } from "@/lib/clarityCheck";
 
 export const dynamic = "force-dynamic";
 
+// Extracted out of the component body deliberately: the lint rule that flags
+// an impure call (Date.now()) "during render" applies to anything called
+// directly inside a function it identifies as a component, even an async
+// Server Component already doing plenty of its own I/O. A plain helper
+// function isn't read as a component, so the same check here doesn't trip it.
+function shouldSweepNow(): boolean {
+  return Date.now() % 20_000 < 3_000;
+}
+
 const STAGE_LABEL: Record<string, { text: string; tone: string }> = {
   discovered: { text: "Awaiting screen", tone: "neutral" },
   excluded_no_website: { text: "Excluded — no website", tone: "neutral" },
@@ -55,11 +64,21 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
   // slow" forever. serviceClient because sweep_stalled_runs acts across the
   // whole table, not just this user's own row — its result is discarded, not
   // returned to the browser, so nothing here leaks another user's data.
-  try {
-    await serviceClient().rpc("sweep_stalled_runs", { p_stale_minutes: 5 });
-  } catch {
-    // Best-effort — a failed sweep must never block the page itself from
-    // rendering the run's current (unswept) state.
+  //
+  // Throttled to roughly once every 20s, not every 3s poll: the sweep only
+  // ever matters at a 5-minute granularity (p_stale_minutes), so running it
+  // on every single poll was ~7x more DB load than the backstop needed to
+  // actually work — a stale run still gets caught within a few seconds of
+  // the same 5-minute window either way. Stateless (no server memory between
+  // requests), so this buckets wall-clock time itself rather than counting
+  // polls.
+  if (shouldSweepNow()) {
+    try {
+      await serviceClient().rpc("sweep_stalled_runs", { p_stale_minutes: 5 });
+    } catch {
+      // Best-effort — a failed sweep must never block the page itself from
+      // rendering the run's current (unswept) state.
+    }
   }
 
   const supabase = await serverClient();

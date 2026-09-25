@@ -169,14 +169,15 @@ export const intakeFormSchema = z
     industry: nonEmpty("Industry")
       .superRefine(checkIndustry)
       .transform((v) => canonicalIndustry(v)?.label ?? v),
-    // Checked against a list of real countries and regions — free, instant and
-    // certain, so no AI call is spent discovering that "nowhere" isn't a place.
-    // The stored value is canonical ("United States", not "usa"), which the
-    // company search then uses as its filter.
+    // Checked against a list of real countries only (not regions — see
+    // geography.ts's file header for why those were removed) — free, instant
+    // and certain, so no AI call is spent discovering that "nowhere" isn't a
+    // place. The stored value is canonical ("United States", not "usa"),
+    // which the company search then uses as its filter.
     geography: nonEmpty("Geography")
       .refine((v) => canonicalPlace(v) !== null, {
         message:
-          "That isn't a place we can search. Use a country or region — for somewhere more specific like a state or city, add it under Must have instead.",
+          "That isn't a place we can search. Use a country — for somewhere more specific like a state or city, add it under Must have instead.",
       })
       .transform((v) => canonicalPlace(v) ?? v),
     minEmployees: z.coerce.number().int().positive("Min employees must be a positive whole number"),
@@ -257,10 +258,18 @@ const icpBaseSchema = z.object({
   industry: nonEmpty("Industry").superRefine(checkIndustry),
   // Accepted but overwritten below — the server derives this itself.
   industryId: z.string().default(""),
-  geography: nonEmpty("Geography").refine((v) => canonicalPlace(v) !== null, {
-    message:
-      "That isn't a place we can search. Use a country or region — for somewhere more specific like a state or city, add it under Must have instead.",
-  }),
+  // .transform() matters here, not just .refine(): the actor's own docs
+  // warn that a short/ambiguous query like "UK" can resolve to the WRONG
+  // LinkedIn location ("Ukraine") rather than failing outright. Storing only
+  // the validated-but-unchanged raw string would carry that exact risk
+  // forward into whatever uses this schema — canonicalPlace already returns
+  // the full, unambiguous name ("United Kingdom"), matching intakeFormSchema.
+  geography: nonEmpty("Geography")
+    .refine((v) => canonicalPlace(v) !== null, {
+      message:
+        "That isn't a place we can search. Use a country — for somewhere more specific like a state or city, add it under Must have instead.",
+    })
+    .transform((v) => canonicalPlace(v) ?? v),
   minEmployees: z.number().int().positive(),
   maxEmployees: z.number().int().positive(),
   // Accepted but overwritten below — the server derives this itself.
